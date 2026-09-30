@@ -1,14 +1,14 @@
 # Workflow dựng video slide
 
-Tool cục bộ dựng video bài giảng từ năm file đầu vào:
+Tool cục bộ dựng video bài giảng từ ba file bắt buộc và hai asset tùy chọn:
 
 - video mẫu dùng làm audio bài giảng;
 - PPTX chứa hình slide;
 - timeline TXT hoặc JSON chứa mốc chuyển slide;
-- ảnh logo đặt ở góc dưới bên phải phần bài giảng;
-- video outro được nối nguyên vẹn ở cuối.
+- ảnh logo tùy chọn, đặt ở góc dưới bên phải phần bài giảng;
+- video outro tùy chọn, được nối nguyên vẹn ở cuối.
 
-Phần `Outro/blank` ở cuối timeline nguồn bị loại bỏ. Outro riêng được co vừa vào khung ngang, có viền đen hai bên khi đầu vào là video dọc. Kết quả là MP4 1280×720, H.264/AAC, mặc định 24 fps.
+Phần `Outro/blank` ở cuối timeline nguồn luôn bị loại bỏ. Nếu không chọn logo, phần bài giảng được dựng không overlay; nếu không chọn outro, video kết thúc tại mốc cuối của slide. Outro được chọn sẽ co vừa vào khung ngang, có viền đen hai bên khi đầu vào là video dọc. Kết quả là MP4 1280×720, H.264/AAC, mặc định 24 fps.
 
 ## Cài đặt và mở giao diện
 
@@ -56,7 +56,7 @@ Có thể chạy UI với console để xem log khởi động:
 
 Trên Linux, LibreOffice chuyển PPTX thành PDF và Poppler tạo ảnh slide. LibreOffice có thể thay font hoặc bố cục so với Microsoft PowerPoint; hãy cài đúng font gốc của bài giảng nếu cần kết quả gần bản Windows. Với tài liệu cần độ trung thực PowerPoint tuyệt đối, nên dựng trên Windows bằng Microsoft PowerPoint.
 
-Trong phần **Global assets**, chọn logo và outro một lần; đường dẫn được lưu trong `.workflow_data/settings.json`. Mỗi job chọn video hoặc audio nguồn, PPTX, timeline TXT, tên output và thư mục output. Job đầu tiên tự chạy, các job sau chờ tuần tự.
+Trong phần **Global assets**, logo và outro đều tùy chọn độc lập: có thể chọn một trong hai, cả hai hoặc để trống cả hai rồi bấm **Save assets**. Đường dẫn được lưu trong `.workflow_data/settings.json`. Mỗi job chọn video hoặc audio nguồn, PPTX, timeline TXT, tên output và thư mục output. Job đầu tiên tự chạy, các job sau chờ tuần tự.
 
 Queue và lịch sử nằm trong `.workflow_data/jobs.json`. Job đang chạy khi ứng dụng đóng sẽ thành `interrupted` và có thể **Retry**. Chi tiết lỗi nằm trong `.workflow_data/logs`. Ứng dụng chỉ lưu đường dẫn đầu vào; nếu file bị di chuyển, job sẽ lỗi và cần chọn lại đúng file. Output có sẵn không bị ghi đè.
 
@@ -100,11 +100,13 @@ Trên Ubuntu/Linux:
 
 Các tùy chọn:
 
+- `--logo`: ảnh logo tùy chọn; bỏ cờ này để không ghép logo.
+- `--outro`: video outro tùy chọn; bỏ cờ này để kết thúc ở mốc slide cuối.
 - `--fps`: frame rate, mặc định `24`.
 - `--logo-width-ratio`: chiều rộng logo so với 1280 px, mặc định `0.12`.
 - `--margin-px`: khoảng cách logo tới mép phải và dưới, mặc định `0` để logo sát góc.
 
-Tool không ghi đè output có sẵn. Khi thành công, file `<output>.report.json` chứa đường dẫn đầu vào, mốc cắt audio nguồn, số slide, thời lượng mong đợi và các kiểm tra đầu ra.
+Tool không ghi đè output có sẵn. Khi thành công, file `<output>.report.json` chứa đường dẫn đầu vào (asset bị bỏ qua có giá trị `null`), mốc cắt audio nguồn, số slide, thời lượng outro (`0` nếu không dùng), thời lượng mong đợi và các kiểm tra đầu ra.
 
 ## Timeline
 

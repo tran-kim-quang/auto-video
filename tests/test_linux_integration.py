@@ -15,7 +15,8 @@ FIXTURES = ROOT / "test"
 
 
 @pytest.mark.integration
-def test_linux_pipeline_builds_short_video(tmp_path: Path) -> None:
+@pytest.mark.parametrize("with_assets", [True, False])
+def test_linux_pipeline_builds_short_video(tmp_path: Path, with_assets: bool) -> None:
     tools = {
         "LibreOffice": shutil.which("libreoffice") or shutil.which("soffice"),
         "pdftocairo": shutil.which("pdftocairo"),
@@ -76,8 +77,8 @@ def test_linux_pipeline_builds_short_video(tmp_path: Path) -> None:
         source_media=source,
         pptx=FIXTURES / "TOAN7_C4_B12_T36_2_fixed.pptx",
         timeline=timeline,
-        logo=FIXTURES / "logo.png",
-        outro=outro,
+        logo=FIXTURES / "logo.png" if with_assets else None,
+        outro=outro if with_assets else None,
         output=tmp_path / "final.mp4",
     )
 
@@ -86,3 +87,6 @@ def test_linux_pipeline_builds_short_video(tmp_path: Path) -> None:
     assert request.output.stat().st_size > 0
     assert Path(f"{request.output}.report.json").is_file()
     assert report.slide_count == 2
+    assert (report.inputs["logo"] is not None) is with_assets
+    assert (report.inputs["outro"] is not None) is with_assets
+    assert (report.outro_duration_ms > 0) is with_assets

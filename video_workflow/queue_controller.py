@@ -33,11 +33,12 @@ class QueueController:
             self._settings = self.store.load_settings()
             self._jobs = self.store.load_jobs()
 
-    def set_global_assets(self, logo: Path, outro: Path) -> GlobalSettings:
-        logo, outro = Path(logo), Path(outro)
-        if not logo.is_file():
+    def set_global_assets(self, logo: Path | None, outro: Path | None) -> GlobalSettings:
+        logo = Path(logo) if logo is not None else None
+        outro = Path(outro) if outro is not None else None
+        if logo is not None and not logo.is_file():
             raise ValueError(f"logo file does not exist: {logo}")
-        if not outro.is_file():
+        if outro is not None and not outro.is_file():
             raise ValueError(f"outro file does not exist: {outro}")
         with self._lock:
             self._settings = GlobalSettings(logo, outro)
@@ -80,11 +81,9 @@ class QueueController:
         return job
 
     def _globals_ready(self) -> bool:
-        return bool(
-            self._settings.logo
-            and self._settings.outro
-            and self._settings.logo.is_file()
-            and self._settings.outro.is_file()
+        return (
+            (self._settings.logo is None or self._settings.logo.is_file())
+            and (self._settings.outro is None or self._settings.outro.is_file())
         )
 
     def claim_next(self) -> JobRecord | None:

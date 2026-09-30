@@ -115,7 +115,6 @@ class QueueWorker:
                 self._set_current(job.id)
                 self.events.put(WorkerEvent("started", job.id, None))
                 settings = self.controller.settings
-                assert settings.logo is not None and settings.outro is not None
                 log_path = self.controller.store.root / "logs" / f"{job.id}.log"
                 request = BuildRequest(
                     source_media=job.source_media,

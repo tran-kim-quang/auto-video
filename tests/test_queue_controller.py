@@ -58,14 +58,22 @@ def test_recovers_running_jobs_and_claims_only_one_in_creation_order(tmp_path: P
     assert reloaded.claim_next().id == second.id
 
 
-def test_missing_globals_pause_then_resume_same_waiting_job(tmp_path: Path) -> None:
+def test_absent_global_assets_do_not_pause_waiting_job(tmp_path: Path) -> None:
     controller, files = _controller(tmp_path, globals_ready=False)
     job = _enqueue(controller, files, tmp_path, "lesson")
-    assert controller.claim_next() is None
-    assert controller.jobs()[0].status is JobStatus.WAITING
-
-    controller.set_global_assets(files["logo"], files["outro"])
     assert controller.claim_next().id == job.id
+
+
+def test_global_assets_are_independently_optional_and_validate_supplied_paths(tmp_path: Path) -> None:
+    controller, files = _controller(tmp_path, globals_ready=False)
+
+    assert controller.set_global_assets(files["logo"], None).logo == files["logo"]
+    assert controller.set_global_assets(None, files["outro"]).outro == files["outro"]
+    settings = controller.set_global_assets(None, None)
+    assert settings.logo is None
+    assert settings.outro is None
+    with pytest.raises(ValueError, match="logo"):
+        controller.set_global_assets(tmp_path / "missing.png", None)
 
 
 def test_output_created_after_enqueue_fails_candidate_and_claims_next(tmp_path: Path) -> None:

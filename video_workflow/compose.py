@@ -98,7 +98,7 @@ def render_lecture(
     slides: Mapping[int, Path],
     spans: Sequence[FrameSpan],
     source_video: Path,
-    logo: Path,
+    logo: Path | None,
     target: Path,
     *,
     fps: int,
@@ -111,16 +111,17 @@ def render_lecture(
         raise CompositionError("cannot render a lecture without slide spans")
     if fps <= 0:
         raise CompositionError("fps must be positive")
-    if not 0 < logo_width_ratio <= 1:
-        raise CompositionError("logo width ratio must be between 0 and 1")
-    if margin_px < 0:
-        raise CompositionError("logo margin must not be negative")
+    if logo is not None:
+        if not 0 < logo_width_ratio <= 1:
+            raise CompositionError("logo width ratio must be between 0 and 1")
+        if margin_px < 0:
+            raise CompositionError("logo margin must not be negative")
     source_video = Path(source_video)
-    logo = Path(logo)
+    logo = Path(logo) if logo is not None else None
     target = Path(target)
     if not source_video.is_file():
         raise CompositionError(f"source video does not exist: {source_video}")
-    if not logo.is_file():
+    if logo is not None and not logo.is_file():
         raise CompositionError(f"logo does not exist: {logo}")
 
     expected_start = spans[0].start_frame
@@ -132,23 +133,45 @@ def render_lecture(
     if spans[0].start_frame != 0 or total_frames <= 0:
         raise CompositionError("slide frame spans must begin at frame zero")
     duration = total_frames / fps
-    logo_width = max(1, round(1280 * logo_width_ratio))
     target.parent.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(prefix="slide-concat-", dir=target.parent) as temporary:
         concat_file = Path(temporary) / "slides.ffconcat"
         _write_slide_concat(concat_file, slides, spans, fps)
-        filter_graph = (
+        base_filter = (
             f"[0:v]scale=1280:720:force_original_aspect_ratio=decrease,"
             "pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=black,"
             "crop=1252:704:14:8,scale=1280:720,"
-            f"fps={fps},setsar=1[base];"
-            f"[1:v]scale={logo_width}:-1[logo];"
-            f"[base][logo]overlay=x=W-w-{margin_px}:y=H-h-{margin_px}:"
-            "eof_action=repeat:format=auto[v];"
-            f"[2:a:0]atrim=start=0:end={duration:.9f},asetpts=PTS-STARTPTS,"
-            "aresample=48000,aformat=sample_rates=48000:channel_layouts=stereo[a]"
+            f"fps={fps},setsar=1[base]"
         )
+        if logo is None:
+            media_inputs = ["-i", str(source_video.resolve())]
+            filter_graph = (
+                f"{base_filter};"
+                f"[base]null[v];"
+                f"[1:a:0]atrim=start=0:end={duration:.9f},asetpts=PTS-STARTPTS,"
+                "aresample=48000,aformat=sample_rates=48000:channel_layouts=stereo[a]"
+            )
+        else:
+            logo_width = max(1, round(1280 * logo_width_ratio))
+            media_inputs = [
+                "-loop",
+                "1",
+                "-framerate",
+                str(fps),
+                "-i",
+                str(logo.resolve()),
+                "-i",
+                str(source_video.resolve()),
+            ]
+            filter_graph = (
+                f"{base_filter};"
+                f"[1:v]scale={logo_width}:-1[logo];"
+                f"[base][logo]overlay=x=W-w-{margin_px}:y=H-h-{margin_px}:"
+                "eof_action=repeat:format=auto[v];"
+                f"[2:a:0]atrim=start=0:end={duration:.9f},asetpts=PTS-STARTPTS,"
+                "aresample=48000,aformat=sample_rates=48000:channel_layouts=stereo[a]"
+            )
         argv = [
             _ffmpeg(),
             "-hide_banner",
@@ -160,14 +183,7 @@ def render_lecture(
             "0",
             "-i",
             str(concat_file),
-            "-loop",
-            "1",
-            "-framerate",
-            str(fps),
-            "-i",
-            str(logo.resolve()),
-            "-i",
-            str(source_video.resolve()),
+            *media_inputs,
             "-filter_complex",
             filter_graph,
             "-map",

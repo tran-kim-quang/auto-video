@@ -180,6 +180,30 @@ def test_render_lecture_changes_slides_on_frames_and_overlays_logo(
     assert _close(samples[2].getpixel((1200, 620)), (20, 20, 240))
 
 
+def test_render_lecture_without_logo_keeps_slide_and_audio(tmp_path: Path) -> None:
+    slide = tmp_path / "slide.png"
+    Image.new("RGB", (1280, 720), (20, 80, 120)).save(slide)
+    source = tmp_path / "source.mp4"
+    _make_audio(source, duration=1.0)
+    output = tmp_path / "lecture.mp4"
+
+    render_lecture(
+        {1: slide},
+        (FrameSpan(1, 0, 24),),
+        source,
+        None,
+        output,
+        fps=24,
+        logo_width_ratio=0.1,
+        margin_px=10,
+    )
+
+    info = probe_media(output)
+    assert info.has_audio is True
+    sample = _frame(output, 0.5, tmp_path / "frame-without-logo.png")
+    assert _close(sample.getpixel((1200, 680)), (20, 80, 120))
+
+
 def test_render_lecture_fits_four_by_three_slide_without_cropping(tmp_path: Path) -> None:
     slide = tmp_path / "slide.png"
     Image.new("RGB", (640, 480), (230, 30, 30)).save(slide)

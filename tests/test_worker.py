@@ -32,14 +32,15 @@ def test_worker_imports_without_pythoncom_on_linux() -> None:
     assert result.returncode == 0, result.stderr
 
 
-def _controller(tmp_path: Path, count: int = 2) -> QueueController:
+def _controller(tmp_path: Path, count: int = 2, *, global_assets: bool = True) -> QueueController:
     files = [tmp_path / name for name in ("source.mp3", "slides.pptx", "timeline.txt", "logo.png", "outro.mp4")]
     for path in files:
         path.write_bytes(b"x")
     output = tmp_path / "output"
     output.mkdir()
     controller = QueueController(JsonStore(tmp_path / "data"))
-    controller.set_global_assets(files[3], files[4])
+    if global_assets:
+        controller.set_global_assets(files[3], files[4])
     for index in range(count):
         controller.enqueue(
             source_media=files[0], pptx=files[1], timeline=files[2],
@@ -120,6 +121,21 @@ def test_worker_pauses_for_missing_globals_and_resumes_on_wake(tmp_path: Path) -
     _wait_until(lambda: controller.jobs()[0].status is JobStatus.COMPLETED)
     worker.stop()
     assert calls == ["job-0.mp4"]
+
+
+def test_worker_builds_job_without_global_assets(tmp_path: Path) -> None:
+    controller = _controller(tmp_path, 1, global_assets=False)
+    requests = []
+    worker = QueueWorker(controller, build=lambda request, **_kwargs: requests.append(request))
+    worker.start()
+    worker.wake()
+    try:
+        _wait_until(lambda: controller.jobs()[0].status is JobStatus.COMPLETED, timeout=0.3)
+    finally:
+        worker.stop(timeout=1)
+
+    assert requests[0].logo is None
+    assert requests[0].outro is None
 
 
 def test_stop_cancels_build_marks_interrupted_and_balances_com(

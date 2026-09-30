@@ -91,9 +91,9 @@ class WorkflowApp:
         global_box = ttk.LabelFrame(outer, text="Global assets", padding=10)
         global_box.pack(fill="x")
         global_box.columnconfigure(1, weight=1)
-        self._path_row(global_box, 0, "Logo", self.logo_var, self.choose_logo)
-        self._path_row(global_box, 1, "Outro", self.outro_var, self.choose_outro)
-        ttk.Button(global_box, text="Save global assets", command=self.save_global_assets).grid(
+        self._path_row(global_box, 0, "Logo (optional)", self.logo_var, self.choose_logo)
+        self._path_row(global_box, 1, "Outro (optional)", self.outro_var, self.choose_outro)
+        ttk.Button(global_box, text="Save assets", command=self.save_global_assets).grid(
             row=2, column=2, sticky="e", pady=(6, 0)
         )
 
@@ -161,13 +161,15 @@ class WorkflowApp:
 
     def save_global_assets(self) -> None:
         try:
-            if not self.logo_var.get().strip() or not self.outro_var.get().strip():
-                raise ValueError("both logo and outro are required")
-            self.controller.set_global_assets(Path(self.logo_var.get().strip()), Path(self.outro_var.get().strip()))
+            logo = self.logo_var.get().strip()
+            outro = self.outro_var.get().strip()
+            self.controller.set_global_assets(
+                Path(logo) if logo else None, Path(outro) if outro else None
+            )
         except (OSError, ValueError) as exc:
             self.show_error(str(exc))
             return
-        self.status_var.set("Global assets saved")
+        self.status_var.set("Optional assets saved")
         self.worker.wake()
 
     def submit_job(self) -> None:

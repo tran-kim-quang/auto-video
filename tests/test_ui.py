@@ -32,8 +32,10 @@ class _Controller:
         self.enqueued.append(kwargs)
 
     def set_global_assets(self, logo, outro):
-        self.globals.append((Path(logo), Path(outro)))
-        self.settings = GlobalSettings(Path(logo), Path(outro))
+        logo = Path(logo) if logo is not None else None
+        outro = Path(outro) if outro is not None else None
+        self.globals.append((logo, outro))
+        self.settings = GlobalSettings(logo, outro)
 
     def jobs(self):
         return ()
@@ -123,6 +125,16 @@ def test_saving_complete_global_paths_wakes_worker(tmp_path: Path) -> None:
     app.outro_var.set(str(outro))
     app.save_global_assets()
     assert app.controller.globals == [(logo, outro)]
+    assert app.worker.wakes == 1
+
+
+def test_saving_blank_global_assets_is_allowed_and_wakes_worker(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+
+    app.save_global_assets()
+
+    assert app.controller.globals == [(None, None)]
+    assert app._errors == []
     assert app.worker.wakes == 1
 
 
