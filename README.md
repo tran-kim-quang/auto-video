@@ -58,7 +58,11 @@ Trên Linux, LibreOffice chuyển PPTX thành PDF và Poppler tạo ảnh slide.
 
 Trong phần **Global assets**, logo và outro đều tùy chọn độc lập: có thể chọn một trong hai, cả hai hoặc để trống cả hai rồi bấm **Save assets**. Đường dẫn được lưu trong `.workflow_data/settings.json`. Mỗi job chọn video hoặc audio nguồn, PPTX, timeline TXT, tên output và thư mục output. Job đầu tiên tự chạy, các job sau chờ tuần tự.
 
-Queue và lịch sử nằm trong `.workflow_data/jobs.json`. Job đang chạy khi ứng dụng đóng sẽ thành `interrupted` và có thể **Retry**. Chi tiết lỗi nằm trong `.workflow_data/logs`. Ứng dụng chỉ lưu đường dẫn đầu vào; nếu file bị di chuyển, job sẽ lỗi và cần chọn lại đúng file. Output có sẵn không bị ghi đè.
+Tab **Merge 2 videos** tạo job ghép theo thứ tự **Video 1 → Video 2**. Hai video được chuẩn hóa độc lập về 1280×720, 24 fps, H.264/AAC trước khi ghép; video dọc được giữ trọn khung với viền đen và video không có audio được thêm silence. Logo và outro toàn cục không áp dụng cho loại job này.
+
+Cả job dựng slide và job ghép video dùng chung một queue FIFO. Cột **Type** cho biết job là `slide` hay `merge`; các thao tác **Retry**, **Remove waiting** và **Open output folder** dùng chung cho cả hai loại.
+
+Queue và lịch sử nằm trong `.workflow_data/jobs.json`. Job đang chạy khi ứng dụng đóng sẽ thành `interrupted` và có thể **Retry**. Chi tiết lỗi nằm trong `.workflow_data/logs`. Ứng dụng chỉ lưu đường dẫn đầu vào; nếu file bị di chuyển, job sẽ lỗi và cần chọn lại đúng file. Output có sẵn không bị ghi đè. Mỗi output ghép thành công cũng có file `<output>.report.json` chứa hai đường dẫn đầu vào và thời lượng từng phần.
 
 ## Yêu cầu
 

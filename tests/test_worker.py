@@ -16,7 +16,6 @@ from video_workflow.pipeline import WorkflowCancelled
 from video_workflow.queue_controller import QueueController
 from video_workflow.worker import QueueWorker
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -28,12 +27,25 @@ def test_worker_imports_without_pythoncom_on_linux() -> None:
         "else original(name,*a,**k); "
         "sys.platform='linux'; import video_workflow.worker"
     )
-    result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
 
 
-def _controller(tmp_path: Path, count: int = 2, *, global_assets: bool = True) -> QueueController:
-    files = [tmp_path / name for name in ("source.mp3", "slides.pptx", "timeline.txt", "logo.png", "outro.mp4")]
+def _controller(
+    tmp_path: Path, count: int = 2, *, global_assets: bool = True
+) -> QueueController:
+    files = [
+        tmp_path / name
+        for name in (
+            "source.mp3",
+            "slides.pptx",
+            "timeline.txt",
+            "logo.png",
+            "outro.mp4",
+        )
+    ]
     for path in files:
         path.write_bytes(b"x")
     output = tmp_path / "output"
@@ -43,8 +55,11 @@ def _controller(tmp_path: Path, count: int = 2, *, global_assets: bool = True) -
         controller.set_global_assets(files[3], files[4])
     for index in range(count):
         controller.enqueue(
-            source_media=files[0], pptx=files[1], timeline=files[2],
-            output_name=f"job-{index}", output_directory=output,
+            source_media=files[0],
+            pptx=files[1],
+            timeline=files[2],
+            output_name=f"job-{index}",
+            output_directory=output,
         )
     return controller
 
@@ -58,7 +73,9 @@ def _wait_until(predicate, timeout: float = 3.0) -> None:
     raise AssertionError("condition did not become true")
 
 
-def test_worker_runs_one_job_at_a_time_and_continues_after_failure(tmp_path: Path) -> None:
+def test_worker_runs_one_job_at_a_time_and_continues_after_failure(
+    tmp_path: Path,
+) -> None:
     controller = _controller(tmp_path, 3)
     active = 0
     max_active = 0
@@ -76,12 +93,21 @@ def test_worker_runs_one_job_at_a_time_and_continues_after_failure(tmp_path: Pat
     worker = QueueWorker(controller, build=build)
     worker.start()
     worker.wake()
-    _wait_until(lambda: all(job.status in {JobStatus.COMPLETED, JobStatus.FAILED} for job in controller.jobs()))
+    _wait_until(
+        lambda: all(
+            job.status in {JobStatus.COMPLETED, JobStatus.FAILED}
+            for job in controller.jobs()
+        )
+    )
     worker.stop()
 
     assert max_active == 1
     assert calls == ["job-0.mp4", "job-1.mp4", "job-2.mp4"]
-    assert [job.status for job in controller.jobs()] == [JobStatus.FAILED, JobStatus.COMPLETED, JobStatus.COMPLETED]
+    assert [job.status for job in controller.jobs()] == [
+        JobStatus.FAILED,
+        JobStatus.COMPLETED,
+        JobStatus.COMPLETED,
+    ]
 
 
 def test_worker_persists_stages_and_emits_events(tmp_path: Path) -> None:
@@ -89,7 +115,14 @@ def test_worker_persists_stages_and_emits_events(tmp_path: Path) -> None:
     events: queue.Queue = queue.Queue()
 
     def build(_request, *, on_stage, **_kwargs):
-        for stage in ("validating", "exporting_slides", "rendering_lecture", "preparing_outro", "joining", "verifying"):
+        for stage in (
+            "validating",
+            "exporting_slides",
+            "rendering_lecture",
+            "preparing_outro",
+            "joining",
+            "verifying",
+        ):
             on_stage(stage)
 
     worker = QueueWorker(controller, build=build, events=events)
@@ -110,7 +143,9 @@ def test_worker_pauses_for_missing_globals_and_resumes_on_wake(tmp_path: Path) -
     logo, outro = controller.settings.logo, controller.settings.outro
     logo.unlink()
     calls: list[str] = []
-    worker = QueueWorker(controller, build=lambda request, **kwargs: calls.append(request.output.name))
+    worker = QueueWorker(
+        controller, build=lambda request, **kwargs: calls.append(request.output.name)
+    )
     worker.start()
     worker.wake()
     time.sleep(0.1)
@@ -126,11 +161,15 @@ def test_worker_pauses_for_missing_globals_and_resumes_on_wake(tmp_path: Path) -
 def test_worker_builds_job_without_global_assets(tmp_path: Path) -> None:
     controller = _controller(tmp_path, 1, global_assets=False)
     requests = []
-    worker = QueueWorker(controller, build=lambda request, **_kwargs: requests.append(request))
+    worker = QueueWorker(
+        controller, build=lambda request, **_kwargs: requests.append(request)
+    )
     worker.start()
     worker.wake()
     try:
-        _wait_until(lambda: controller.jobs()[0].status is JobStatus.COMPLETED, timeout=0.3)
+        _wait_until(
+            lambda: controller.jobs()[0].status is JobStatus.COMPLETED, timeout=0.3
+        )
     finally:
         worker.stop(timeout=1)
 
@@ -213,3 +252,108 @@ def test_stop_does_not_lose_wake_between_loop_check_and_wait(tmp_path: Path) -> 
         worker._thread.join(1)
 
     assert was_alive is False
+
+
+def test_worker_dispatches_merge_job_and_persists_merge_stages(tmp_path: Path) -> None:
+    controller = _controller(tmp_path, 0)
+    job = controller.enqueue_merge(
+        first_video=tmp_path / "source.mp3",
+        second_video=tmp_path / "outro.mp4",
+        output_name="merged",
+        output_directory=tmp_path / "output",
+    )
+    requests = []
+    events: queue.Queue = queue.Queue()
+
+    def unexpected_slide_build(*_args, **_kwargs):
+        raise AssertionError("slide builder must not handle merge jobs")
+
+    def merge_build(request, *, on_stage, **_kwargs):
+        requests.append(request)
+        for stage in (
+            "validating",
+            "normalizing_first",
+            "normalizing_second",
+            "joining",
+            "verifying",
+        ):
+            on_stage(stage)
+
+    worker = QueueWorker(
+        controller,
+        build=unexpected_slide_build,
+        merge_build=merge_build,
+        events=events,
+    )
+    worker.start()
+    worker.wake()
+    try:
+        _wait_until(lambda: controller.jobs()[0].status is JobStatus.COMPLETED)
+    finally:
+        worker.stop()
+
+    assert requests[0].first_video == job.source_media
+    assert requests[0].second_video == job.secondary_media
+    assert requests[0].output == job.output_path
+    stage_messages = []
+    while not events.empty():
+        event = events.get_nowait()
+        if event.kind == "stage":
+            stage_messages.append(event.message)
+    assert stage_messages == [
+        "validating",
+        "normalizing_first",
+        "normalizing_second",
+        "joining",
+        "verifying",
+    ]
+
+
+@pytest.mark.integration
+def test_default_worker_runs_merge_pipeline_from_queue(tmp_path: Path) -> None:
+    controller = _controller(tmp_path, 0)
+    first = tmp_path / "first.mp4"
+    second = tmp_path / "second.mp4"
+    for path, color, size, fps in (
+        (first, "red", "320x240", 12),
+        (second, "blue", "240x320", 30),
+    ):
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                f"color=c={color}:s={size}:r={fps}:d=0.25",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-y",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
+        )
+    job = controller.enqueue_merge(
+        first_video=first,
+        second_video=second,
+        output_name="merged",
+        output_directory=tmp_path / "output",
+    )
+    worker = QueueWorker(controller)
+    worker.start()
+    worker.wake()
+    try:
+        _wait_until(
+            lambda: controller.jobs()[0].status
+            in {JobStatus.COMPLETED, JobStatus.FAILED}
+        )
+    finally:
+        worker.stop()
+
+    assert controller.jobs()[0].status is JobStatus.COMPLETED
+    assert job.output_path.stat().st_size > 0

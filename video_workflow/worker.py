@@ -5,7 +5,6 @@ import sys
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Callable
 
 if sys.platform == "win32":
@@ -13,7 +12,8 @@ if sys.platform == "win32":
 else:
     pythoncom = None
 
-from .job_models import JobStage, JobStatus
+from .job_models import JobKind, JobStage, JobStatus
+from .merge_pipeline import MergeRequest, merge_videos
 from .pipeline import BuildReport, BuildRequest, WorkflowCancelled, build_video
 from .queue_controller import QueueController, QueueStateError
 
@@ -46,11 +46,14 @@ class QueueWorker:
         controller: QueueController,
         *,
         build: BuildFunction = build_video,
+        merge_build: BuildFunction | None = merge_videos,
         events: queue.Queue[WorkerEvent] | None = None,
     ) -> None:
         self.controller = controller
-        self.build = build
-        self.events: queue.Queue[WorkerEvent] = events if events is not None else queue.Queue()
+        self.build, self.merge_build = build, merge_build
+        self.events: queue.Queue[WorkerEvent] = (
+            events if events is not None else queue.Queue()
+        )
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._cancel = threading.Event()
@@ -75,7 +78,9 @@ class QueueWorker:
             return
         self._stop.clear()
         self._cancel.clear()
-        self._thread = threading.Thread(target=self._run, name="video-workflow-worker", daemon=True)
+        self._thread = threading.Thread(
+            target=self._run, name="video-workflow-worker", daemon=True
+        )
         self._thread.start()
         self.wake()
 
@@ -83,7 +88,9 @@ class QueueWorker:
         self._wake.set()
 
     def _status(self, job_id: str) -> JobStatus | None:
-        return next((job.status for job in self.controller.jobs() if job.id == job_id), None)
+        return next(
+            (job.status for job in self.controller.jobs() if job.id == job_id), None
+        )
 
     def stop(self, timeout: float = 10.0) -> None:
         self._stop.set()
@@ -114,20 +121,35 @@ class QueueWorker:
                 self._cancel.clear()
                 self._set_current(job.id)
                 self.events.put(WorkerEvent("started", job.id, None))
-                settings = self.controller.settings
                 log_path = self.controller.store.root / "logs" / f"{job.id}.log"
-                request = BuildRequest(
-                    source_media=job.source_media,
-                    pptx=job.pptx,
-                    timeline=job.timeline,
-                    logo=settings.logo,
-                    outro=settings.outro,
-                    output=job.output_path,
-                )
                 try:
-                    self.build(
+                    if job.kind is JobKind.MERGE:
+                        if job.secondary_media is None or self.merge_build is None:
+                            raise RuntimeError("merge builder is not configured")
+                        request = MergeRequest(
+                            first_video=job.source_media,
+                            second_video=job.secondary_media,
+                            output=job.output_path,
+                        )
+                        builder = self.merge_build
+                    else:
+                        if job.pptx is None or job.timeline is None:
+                            raise RuntimeError("slide job is missing PPTX or timeline")
+                        settings = self.controller.settings
+                        request = BuildRequest(
+                            source_media=job.source_media,
+                            pptx=job.pptx,
+                            timeline=job.timeline,
+                            logo=settings.logo,
+                            outro=settings.outro,
+                            output=job.output_path,
+                        )
+                        builder = self.build
+                    builder(
                         request,
-                        on_stage=lambda stage, job_id=job.id: self._emit_stage(job_id, stage),
+                        on_stage=lambda stage, job_id=job.id: self._emit_stage(
+                            job_id, stage
+                        ),
                         cancel_event=self._cancel,
                         log_path=log_path,
                     )

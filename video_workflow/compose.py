@@ -60,7 +60,9 @@ def _run_ffmpeg(
             log_handle.flush()
             log_handle.seek(0)
             detail = log_handle.read().strip()
-            raise CompositionError(f"{action} failed: {detail or f'ffmpeg exited with {process.returncode}'}")
+            raise CompositionError(
+                f"{action} failed: {detail or f'ffmpeg exited with {process.returncode}'}"
+            )
     except CompositionError:
         raise
     except OSError as exc:
@@ -135,7 +137,9 @@ def render_lecture(
     duration = total_frames / fps
     target.parent.mkdir(parents=True, exist_ok=True)
 
-    with tempfile.TemporaryDirectory(prefix="slide-concat-", dir=target.parent) as temporary:
+    with tempfile.TemporaryDirectory(
+        prefix="slide-concat-", dir=target.parent
+    ) as temporary:
         concat_file = Path(temporary) / "slides.ffconcat"
         _write_slide_concat(concat_file, slides, spans, fps)
         base_filter = (
@@ -217,26 +221,28 @@ def render_lecture(
             "-y",
             str(target.resolve()),
         ]
-        _run_ffmpeg(argv, "lecture render", cancel_event=cancel_event, log_path=log_path)
+        _run_ffmpeg(
+            argv, "lecture render", cancel_event=cancel_event, log_path=log_path
+        )
     if not target.is_file() or target.stat().st_size == 0:
         raise CompositionError("lecture render did not produce an output file")
 
 
-def normalize_outro(
-    outro: Path,
+def normalize_video(
+    source_video: Path,
     target: Path,
     *,
     fps: int,
     cancel_event: threading.Event | None = None,
     log_path: Path | None = None,
 ) -> None:
-    outro = Path(outro)
+    source_video = Path(source_video)
     target = Path(target)
     if fps <= 0:
         raise CompositionError("fps must be positive")
-    info = probe_media(outro)
+    info = probe_media(source_video)
     if info.width is None or info.height is None:
-        raise CompositionError("outro does not contain a video stream")
+        raise CompositionError("source does not contain a video stream")
     duration = info.duration_ms / 1000
     total_frames = max(1, (info.duration_ms * fps + 500) // 1000)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -247,7 +253,7 @@ def normalize_outro(
         "-loglevel",
         "error",
         "-i",
-        str(outro.resolve()),
+        str(source_video.resolve()),
     ]
     audio_input = "0:a:0"
     if not info.has_audio:
@@ -301,9 +307,24 @@ def normalize_outro(
         "-y",
         str(target.resolve()),
     ]
-    _run_ffmpeg(argv, "outro normalization", cancel_event=cancel_event, log_path=log_path)
+    _run_ffmpeg(
+        argv, "video normalization", cancel_event=cancel_event, log_path=log_path
+    )
     if not target.is_file() or target.stat().st_size == 0:
-        raise CompositionError("outro normalization did not produce an output file")
+        raise CompositionError("video normalization did not produce an output file")
+
+
+def normalize_outro(
+    outro: Path,
+    target: Path,
+    *,
+    fps: int,
+    cancel_event: threading.Event | None = None,
+    log_path: Path | None = None,
+) -> None:
+    normalize_video(
+        outro, target, fps=fps, cancel_event=cancel_event, log_path=log_path
+    )
 
 
 def join_parts(
@@ -322,7 +343,9 @@ def join_parts(
             raise CompositionError(f"{label} file does not exist: {path}")
         info = probe_media(path)
         if not info.has_audio or info.width != 1280 or info.height != 720:
-            raise CompositionError(f"{label} is not a normalized 1280x720 video with audio")
+            raise CompositionError(
+                f"{label} is not a normalized 1280x720 video with audio"
+            )
     target.parent.mkdir(parents=True, exist_ok=True)
     filter_graph = (
         "[0:v]settb=AVTB,setpts=PTS-STARTPTS,format=yuv420p[v0];"
