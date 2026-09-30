@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from video_workflow.job_models import GlobalSettings
-from video_workflow.ui import JobFormData, WorkflowApp
+from video_workflow.ui import JobFormData, WorkflowApp, _open_directory
 from video_workflow.worker import WorkerEvent
 
 
@@ -53,6 +53,22 @@ class _Worker:
 
     def is_alive(self):
         return False
+
+
+def test_open_output_folder_uses_xdg_open_on_linux(tmp_path: Path, monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr("video_workflow.ui.sys.platform", "linux")
+    monkeypatch.setattr("video_workflow.ui.subprocess.Popen", lambda argv: calls.append(argv))
+    _open_directory(tmp_path)
+    assert calls == [["xdg-open", str(tmp_path)]]
+
+
+def test_open_output_folder_uses_startfile_on_windows(tmp_path: Path, monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr("video_workflow.ui.sys.platform", "win32")
+    monkeypatch.setattr("video_workflow.ui.os.startfile", lambda path: calls.append(path), raising=False)
+    _open_directory(tmp_path)
+    assert calls == [tmp_path]
 
 
 def _app(tmp_path: Path) -> WorkflowApp:

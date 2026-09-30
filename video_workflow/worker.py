@@ -1,16 +1,33 @@
 from __future__ import annotations
 
 import queue
+import sys
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-import pythoncom
+if sys.platform == "win32":
+    import pythoncom
+else:
+    pythoncom = None
 
 from .job_models import JobStage, JobStatus
 from .pipeline import BuildReport, BuildRequest, WorkflowCancelled, build_video
 from .queue_controller import QueueController, QueueStateError
+
+
+@contextmanager
+def _com_context():
+    if pythoncom is None:
+        yield
+        return
+    pythoncom.CoInitialize()
+    try:
+        yield
+    finally:
+        pythoncom.CoUninitialize()
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,8 +104,7 @@ class QueueWorker:
         self.events.put(WorkerEvent("stage", job_id, stage))
 
     def _run(self) -> None:
-        pythoncom.CoInitialize()
-        try:
+        with _com_context():
             while not self._stop.is_set():
                 job = self.controller.claim_next()
                 if job is None:
@@ -130,5 +146,3 @@ class QueueWorker:
                         self.events.put(WorkerEvent("completed", job.id, None))
                 finally:
                     self._set_current(None)
-        finally:
-            pythoncom.CoUninitialize()

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import queue
+import subprocess
+import sys
 import tkinter as tk
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +12,15 @@ from tkinter import filedialog, messagebox, ttk
 from .json_store import JsonStore
 from .queue_controller import QueueController, QueueStateError
 from .worker import QueueWorker
+
+
+def _open_directory(path: Path) -> None:
+    if sys.platform == "win32":
+        os.startfile(path)
+    elif sys.platform.startswith("linux"):
+        subprocess.Popen(["xdg-open", str(path)])
+    else:
+        raise OSError(f"opening folders is unsupported on {sys.platform}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,7 +229,7 @@ class WorkflowApp:
         try:
             job_id = self._selected_id()
             job = next(job for job in self.controller.jobs() if job.id == job_id)
-            os.startfile(job.output_directory)
+            _open_directory(job.output_directory)
         except (OSError, StopIteration, ValueError) as exc:
             self.show_error(str(exc))
 

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import queue
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,6 +15,21 @@ from video_workflow.json_store import JsonStore
 from video_workflow.pipeline import WorkflowCancelled
 from video_workflow.queue_controller import QueueController
 from video_workflow.worker import QueueWorker
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_worker_imports_without_pythoncom_on_linux() -> None:
+    code = (
+        "import builtins, sys; original=builtins.__import__; "
+        "builtins.__import__=lambda name,*a,**k: "
+        "(_ for _ in ()).throw(ImportError('blocked')) if name=='pythoncom' "
+        "else original(name,*a,**k); "
+        "sys.platform='linux'; import video_workflow.worker"
+    )
+    result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
 
 
 def _controller(tmp_path: Path, count: int = 2) -> QueueController:
@@ -110,8 +128,13 @@ def test_stop_cancels_build_marks_interrupted_and_balances_com(
     controller = _controller(tmp_path, 1)
     entered = threading.Event()
     com_calls: list[str] = []
-    monkeypatch.setattr("video_workflow.worker.pythoncom.CoInitialize", lambda: com_calls.append("init"))
-    monkeypatch.setattr("video_workflow.worker.pythoncom.CoUninitialize", lambda: com_calls.append("uninit"))
+    monkeypatch.setattr(
+        "video_workflow.worker.pythoncom",
+        SimpleNamespace(
+            CoInitialize=lambda: com_calls.append("init"),
+            CoUninitialize=lambda: com_calls.append("uninit"),
+        ),
+    )
 
     def build(_request, *, cancel_event, **_kwargs):
         entered.set()
@@ -127,3 +150,19 @@ def test_stop_cancels_build_marks_interrupted_and_balances_com(
     assert not worker.is_alive()
     assert controller.jobs()[0].status is JobStatus.INTERRUPTED
     assert com_calls == ["init", "uninit"]
+
+
+def test_worker_com_context_is_noop_on_linux(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    controller = _controller(tmp_path, 1)
+    monkeypatch.setattr("video_workflow.worker.pythoncom", None)
+    calls: list[str] = []
+    worker = QueueWorker(
+        controller,
+        build=lambda request, **kwargs: calls.append(request.output.name),
+    )
+    worker.start()
+    _wait_until(lambda: controller.jobs()[0].status is JobStatus.COMPLETED)
+    worker.stop()
+    assert calls == ["job-0.mp4"]
