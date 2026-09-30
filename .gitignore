@@ -2,6 +2,7 @@
 .workflow_data/
 .pytest_cache/
 .superpowers/
+.worktrees/
 *.egg-info/
 __pycache__/
 *.py[cod]
