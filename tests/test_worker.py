@@ -166,3 +166,34 @@ def test_worker_com_context_is_noop_on_linux(
     _wait_until(lambda: controller.jobs()[0].status is JobStatus.COMPLETED)
     worker.stop()
     assert calls == ["job-0.mp4"]
+
+
+def test_stop_does_not_lose_wake_between_loop_check_and_wait(tmp_path: Path) -> None:
+    controller = _controller(tmp_path, 0)
+    worker = QueueWorker(controller, build=lambda *_args, **_kwargs: None)
+    clear_entered = threading.Event()
+    release_clear = threading.Event()
+    original_clear = worker._wake.clear
+
+    def blocking_clear() -> None:
+        clear_entered.set()
+        release_clear.wait(1)
+        original_clear()
+
+    worker._wake.clear = blocking_clear
+    worker.start()
+    assert clear_entered.wait(1)
+
+    stopper = threading.Thread(target=worker.stop, kwargs={"timeout": 0.05})
+    stopper.start()
+    stopper.join(1)
+    assert not stopper.is_alive()
+    release_clear.set()
+    time.sleep(0.05)
+
+    was_alive = worker.is_alive()
+    if was_alive:
+        worker._wake.set()
+        worker._thread.join(1)
+
+    assert was_alive is False

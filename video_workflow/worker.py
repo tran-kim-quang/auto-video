@@ -108,8 +108,8 @@ class QueueWorker:
             while not self._stop.is_set():
                 job = self.controller.claim_next()
                 if job is None:
-                    self._wake.clear()
                     self._wake.wait()
+                    self._wake.clear()
                     continue
                 self._cancel.clear()
                 self._set_current(job.id)
