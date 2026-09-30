@@ -1,0 +1,102 @@
+from __future__ import annotations
+
+import json
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
+
+from video_workflow.job_models import (
+    GlobalSettings,
+    JobRecord,
+    JobStage,
+    JobStatus,
+    validate_output_name,
+)
+from video_workflow.json_store import JsonStore
+
+
+def _job(tmp_path: Path, *, status: JobStatus = JobStatus.WAITING) -> JobRecord:
+    return JobRecord.new(
+        source_media=tmp_path / "đầu vào có dấu.mp3",
+        pptx=tmp_path / "bài giảng.pptx",
+        timeline=tmp_path / "timeline.txt",
+        output_name="kết quả",
+        output_directory=tmp_path / "thư mục output",
+        status=status,
+    )
+
+
+def test_models_validate_output_names_and_build_path(tmp_path: Path) -> None:
+    assert {item.value for item in JobStatus} == {
+        "waiting", "running", "completed", "failed", "interrupted"
+    }
+    assert {item.value for item in JobStage} == {
+        "validating", "exporting_slides", "rendering_lecture",
+        "preparing_outro", "joining", "verifying",
+    }
+    assert validate_output_name("Bài giảng 01") == "Bài giảng 01.mp4"
+    assert validate_output_name("lesson.MP4") == "lesson.MP4"
+    job = _job(tmp_path)
+    assert job.output_name == "kết quả.mp4"
+    assert job.output_path == tmp_path / "thư mục output" / "kết quả.mp4"
+    assert "+00:00" in job.created_at
+
+
+@pytest.mark.parametrize("name", ["", "../bad", "a/b", "a\\b", "bad:name", "CON", "con.mp4", "name. "])
+def test_rejects_unsafe_windows_output_names(name: str) -> None:
+    with pytest.raises(ValueError):
+        validate_output_name(name)
+
+
+def test_settings_and_jobs_round_trip_unicode_paths(tmp_path: Path) -> None:
+    store = JsonStore(tmp_path / ".workflow_data")
+    settings = GlobalSettings(logo=tmp_path / "ảnh logo.png", outro=tmp_path / "video kết thúc.mp4")
+    jobs = [
+        _job(tmp_path),
+        replace(_job(tmp_path), id="second", status=JobStatus.INTERRUPTED, error="đã dừng"),
+    ]
+
+    store.save_settings(settings)
+    store.save_jobs(jobs)
+
+    assert store.load_settings() == settings
+    assert store.load_jobs() == jobs
+    raw = (store.root / "jobs.json").read_text(encoding="utf-8")
+    assert "kết quả" in raw
+    assert "\\u" not in raw
+
+
+def test_failed_atomic_replace_keeps_previous_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = JsonStore(tmp_path / "data")
+    original = [_job(tmp_path)]
+    store.save_jobs(original)
+
+    def fail_replace(*_args) -> None:
+        raise OSError("disk busy")
+
+    monkeypatch.setattr("video_workflow.json_store.os.replace", fail_replace)
+    with pytest.raises(OSError, match="disk busy"):
+        store.save_jobs([replace(original[0], id="changed")])
+
+    assert json.loads((store.root / "jobs.json").read_text(encoding="utf-8"))["jobs"][0]["id"] == original[0].id
+
+
+def test_corrupt_jobs_are_backed_up_and_reported(tmp_path: Path) -> None:
+    store = JsonStore(tmp_path / "data")
+    store.root.mkdir(parents=True)
+    (store.root / "jobs.json").write_text('{"jobs": [', encoding="utf-8")
+
+    assert store.load_jobs() == []
+    assert any(store.root.glob("jobs.json.corrupt-*"))
+    assert store.warnings and "jobs.json" in store.warnings[0]
+
+
+def test_valid_json_with_unsupported_schema_is_also_preserved(tmp_path: Path) -> None:
+    store = JsonStore(tmp_path / "data")
+    store.root.mkdir(parents=True)
+    (store.root / "jobs.json").write_text('{"schema_version": 99, "jobs": []}', encoding="utf-8")
+
+    assert store.load_jobs() == []
+    assert not (store.root / "jobs.json").exists()
+    assert any(store.root.glob("jobs.json.corrupt-*"))

@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyramid-slide-video-workflow"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["pywin32>=306; sys_platform == 'win32'"]
+
+[project.optional-dependencies]
+dev = ["pillow>=11", "pytest>=9"]
+
+[project.scripts]
+build-video = "video_workflow.cli:main"
+video-workflow-ui = "video_workflow.ui:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["video_workflow*"]

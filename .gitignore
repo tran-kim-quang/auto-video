@@ -1,0 +1,12 @@
+.venv/
+.workflow_data/
+.pytest_cache/
+.superpowers/
+*.egg-info/
+__pycache__/
+*.py[cod]
+*.log
+
+# Generated review outputs
+test/final-workflow*.mp4*
+test/queue-review-output/
