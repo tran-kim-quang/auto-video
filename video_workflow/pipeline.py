@@ -9,7 +9,7 @@ from pathlib import Path
 from collections.abc import Callable
 
 from .compose import CompositionCancelled, join_parts, normalize_outro, render_lecture
-from .powerpoint import count_pptx_slides, export_slides
+from .slide_export import count_pptx_slides, export_slides
 from .probe import MediaInfo, probe_media
 from .timeline import parse_timeline, validate_timeline
 
