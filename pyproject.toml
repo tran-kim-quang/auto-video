@@ -17,6 +17,7 @@ video-workflow-ui = "video_workflow.ui:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["integration: requires real Linux media and slide tools"]
 
 [tool.setuptools.packages.find]
 include = ["video_workflow*"]
