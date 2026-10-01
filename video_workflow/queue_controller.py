@@ -228,6 +228,42 @@ class QueueController:
             self._jobs.pop(index)
             self.store.save_jobs(self._jobs)
 
+    def restore_available_path_jobs(self) -> tuple[JobRecord, ...]:
+        """Requeue jobs that failed only because a required path disappeared."""
+        with self._lock:
+            restored: list[JobRecord] = []
+            remaining: list[JobRecord] = []
+            for job in self._jobs:
+                path_error = bool(
+                    job.error
+                    and (
+                        " file does not exist:" in job.error
+                        or job.error.startswith("output directory does not exist:")
+                    )
+                )
+                if (
+                    job.status is JobStatus.FAILED
+                    and path_error
+                    and self._validate_job_paths(job) is None
+                ):
+                    restored.append(
+                        replace(
+                            job,
+                            status=JobStatus.WAITING,
+                            stage=None,
+                            error=None,
+                            started_at=None,
+                            finished_at=None,
+                            created_at=utc_now(),
+                        )
+                    )
+                else:
+                    remaining.append(job)
+            if restored:
+                self._jobs = remaining + restored
+                self.store.save_jobs(self._jobs)
+            return tuple(restored)
+
     def recover_startup(self) -> None:
         with self._lock:
             changed = False

@@ -62,6 +62,8 @@ Tab **Merge 2 videos** tạo job ghép theo thứ tự **Video 1 → Video 2**. 
 
 Cả job dựng slide và job ghép video dùng chung một queue FIFO. Cột **Type** cho biết job là `slide` hay `merge`; các thao tác **Retry**, **Remove waiting** và **Open output folder** dùng chung cho cả hai loại.
 
+Trình chọn file/thư mục tự quét lại nội dung đang hiển thị, còn các ô đường dẫn và cột **Files** trong queue cập nhật trạng thái filesystem mỗi giây. Nếu một job lỗi chỉ vì file đầu vào tạm thời biến mất, ứng dụng tự đưa job về cuối queue khi file xuất hiện lại đúng đường dẫn.
+
 Queue và lịch sử nằm trong `.workflow_data/jobs.json`. Job đang chạy khi ứng dụng đóng sẽ thành `interrupted` và có thể **Retry**. Chi tiết lỗi nằm trong `.workflow_data/logs`. Ứng dụng chỉ lưu đường dẫn đầu vào; nếu file bị di chuyển, job sẽ lỗi và cần chọn lại đúng file. Output có sẵn không bị ghi đè. Mỗi output ghép thành công cũng có file `<output>.report.json` chứa hai đường dẫn đầu vào và thời lượng từng phần.
 
 ## Yêu cầu

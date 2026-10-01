@@ -7,9 +7,11 @@ import sys
 import tkinter as tk
 from dataclasses import dataclass
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import messagebox, ttk
 
+from .job_models import JobKind, JobRecord, JobStatus
 from .json_store import JsonStore
+from .live_path_dialog import LivePathDialog
 from .queue_controller import QueueController, QueueStateError
 from .worker import QueueWorker
 
@@ -91,6 +93,14 @@ class MergeFormData:
         )
 
 
+@dataclass(slots=True)
+class _PathBinding:
+    variable: tk.StringVar
+    kind: str
+    optional: bool
+    indicator: ttk.Label
+
+
 class WorkflowApp:
     def __init__(
         self, root: tk.Tk, controller: QueueController, worker: QueueWorker
@@ -99,6 +109,9 @@ class WorkflowApp:
         self.controller = controller
         self.worker = worker
         self._closing = False
+        self._path_bindings: list[_PathBinding] = []
+        self._waiting_readiness: dict[str, bool] = {}
+        self._last_directory = Path.cwd()
         root.title("Pyramid Slide Video Queue")
         root.geometry("1120x720")
         root.minsize(900, 600)
@@ -121,6 +134,7 @@ class WorkflowApp:
         self.refresh_jobs()
         root.protocol("WM_DELETE_WINDOW", self.close)
         root.after(200, self._poll_worker_events)
+        root.after(250, self._poll_filesystem)
 
     def _path_row(
         self,
@@ -130,6 +144,9 @@ class WorkflowApp:
         variable: tk.StringVar,
         command,
         button="Browse",
+        *,
+        kind: str = "file",
+        optional: bool = False,
     ) -> None:
         ttk.Label(parent, text=label).grid(
             row=row, column=0, sticky="w", padx=(0, 8), pady=3
@@ -137,11 +154,19 @@ class WorkflowApp:
         ttk.Entry(parent, textvariable=variable).grid(
             row=row, column=1, sticky="ew", pady=3
         )
+        indicator = ttk.Label(parent, width=12, anchor="e")
+        indicator.grid(row=row, column=2, padx=(8, 0), pady=3, sticky="e")
+        self._path_bindings.append(_PathBinding(variable, kind, optional, indicator))
         ttk.Button(parent, text=button, command=command).grid(
-            row=row, column=2, padx=(8, 0), pady=3
+            row=row, column=3, padx=(8, 0), pady=3
         )
 
     def _build_layout(self) -> None:
+        style = ttk.Style(self.root)
+        style.configure("Path.Available.TLabel", foreground="#188038")
+        style.configure("Path.Missing.TLabel", foreground="#c5221f")
+        style.configure("Path.Empty.TLabel", foreground="#6b7280")
+
         outer = ttk.Frame(self.root, padding=12)
         outer.pack(fill="both", expand=True)
 
@@ -149,14 +174,24 @@ class WorkflowApp:
         global_box.pack(fill="x")
         global_box.columnconfigure(1, weight=1)
         self._path_row(
-            global_box, 0, "Logo (optional)", self.logo_var, self.choose_logo
+            global_box,
+            0,
+            "Logo (optional)",
+            self.logo_var,
+            self.choose_logo,
+            optional=True,
         )
         self._path_row(
-            global_box, 1, "Outro (optional)", self.outro_var, self.choose_outro
+            global_box,
+            1,
+            "Outro (optional)",
+            self.outro_var,
+            self.choose_outro,
+            optional=True,
         )
         ttk.Button(
             global_box, text="Save assets", command=self.save_global_assets
-        ).grid(row=2, column=2, sticky="e", pady=(6, 0))
+        ).grid(row=2, column=3, sticky="e", pady=(6, 0))
 
         job_tabs = ttk.Notebook(outer)
         job_tabs.pack(fill="x", pady=10)
@@ -177,9 +212,10 @@ class WorkflowApp:
             "Output directory",
             self.output_directory_var,
             self.choose_output_directory,
+            kind="directory",
         )
         self.add_button = ttk.Button(form, text="Add to queue", command=self.submit_job)
-        self.add_button.grid(row=5, column=2, sticky="e", pady=(8, 0))
+        self.add_button.grid(row=5, column=3, sticky="e", pady=(8, 0))
 
         merge_form = ttk.Frame(job_tabs, padding=10)
         merge_form.columnconfigure(1, weight=1)
@@ -202,15 +238,24 @@ class WorkflowApp:
             "Output directory",
             self.merge_output_directory_var,
             self.choose_merge_output_directory,
+            kind="directory",
         )
         self.merge_button = ttk.Button(
             merge_form, text="Add to queue", command=self.submit_merge_job
         )
-        self.merge_button.grid(row=4, column=2, sticky="e", pady=(8, 0))
+        self.merge_button.grid(row=4, column=3, sticky="e", pady=(8, 0))
 
         queue_box = ttk.LabelFrame(outer, text="Queue", padding=8)
         queue_box.pack(fill="both", expand=True)
-        columns = ("type", "output", "source", "status", "stage", "result")
+        columns = (
+            "type",
+            "output",
+            "source",
+            "files",
+            "status",
+            "stage",
+            "result",
+        )
         self.tree = ttk.Treeview(
             queue_box, columns=columns, show="headings", selectmode="browse"
         )
@@ -218,6 +263,7 @@ class WorkflowApp:
             "type": "Type",
             "output": "Output",
             "source": "Source",
+            "files": "Files",
             "status": "Status",
             "stage": "Stage",
             "result": "Result / error",
@@ -226,6 +272,7 @@ class WorkflowApp:
             "type": 70,
             "output": 150,
             "source": 240,
+            "files": 150,
             "status": 90,
             "stage": 130,
             "result": 320,
@@ -257,10 +304,39 @@ class WorkflowApp:
     def show_error(self, message: str) -> None:
         messagebox.showerror("Video workflow", message, parent=self.root)
 
-    def _choose_file(self, variable: tk.StringVar, filetypes) -> None:
-        path = filedialog.askopenfilename(parent=self.root, filetypes=filetypes)
+    def _initial_directory(self, variable: tk.StringVar) -> Path:
+        raw = variable.get().strip()
+        if raw:
+            candidate = Path(raw).expanduser()
+            if candidate.is_dir():
+                return candidate
+            if candidate.parent.is_dir():
+                return candidate.parent
+        return self._last_directory
+
+    def _choose_file(
+        self, variable: tk.StringVar, filetypes: list[tuple[str, str]]
+    ) -> None:
+        path = LivePathDialog(
+            self.root,
+            title="Select file",
+            initial_directory=self._initial_directory(variable),
+            filetypes=filetypes,
+        ).show()
         if path:
             variable.set(path)
+            self._last_directory = Path(path).parent
+
+    def _choose_directory(self, variable: tk.StringVar) -> None:
+        path = LivePathDialog(
+            self.root,
+            title="Select folder",
+            initial_directory=self._initial_directory(variable),
+            select_directory=True,
+        ).show()
+        if path:
+            variable.set(path)
+            self._last_directory = Path(path)
 
     def choose_logo(self) -> None:
         self._choose_file(
@@ -289,9 +365,7 @@ class WorkflowApp:
         self._choose_file(self.timeline_var, [("Timeline", "*.txt")])
 
     def choose_output_directory(self) -> None:
-        path = filedialog.askdirectory(parent=self.root)
-        if path:
-            self.output_directory_var.set(path)
+        self._choose_directory(self.output_directory_var)
 
     def choose_first_video(self) -> None:
         self._choose_file(
@@ -306,9 +380,7 @@ class WorkflowApp:
         )
 
     def choose_merge_output_directory(self) -> None:
-        path = filedialog.askdirectory(parent=self.root)
-        if path:
-            self.merge_output_directory_var.set(path)
+        self._choose_directory(self.merge_output_directory_var)
 
     def save_global_assets(self) -> None:
         try:
@@ -373,27 +445,113 @@ class WorkflowApp:
         if not hasattr(self, "tree"):
             return
         selected = self.tree.selection()
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-        for job in self.controller.jobs():
+        present: set[str] = set()
+        for position, job in enumerate(self.controller.jobs()):
+            present.add(job.id)
             result = job.error or (
                 str(job.output_path) if job.status.value == "completed" else ""
             )
-            self.tree.insert(
-                "",
-                "end",
-                iid=job.id,
-                values=(
-                    job.kind.value,
-                    job.output_name,
-                    str(job.source_media),
-                    job.status.value,
-                    job.stage.value if job.stage else "",
-                    result,
-                ),
+            source = str(job.source_media)
+            if job.kind is JobKind.MERGE and job.secondary_media is not None:
+                source = f"{source}  →  {job.secondary_media}"
+            values = (
+                job.kind.value,
+                job.output_name,
+                source,
+                self._job_files_summary(job),
+                job.status.value,
+                job.stage.value if job.stage else "",
+                result,
             )
+            if self.tree.exists(job.id):
+                self.tree.item(job.id, values=values)
+            else:
+                self.tree.insert("", "end", iid=job.id, values=values)
+            self.tree.move(job.id, "", position)
+        for item in self.tree.get_children():
+            if item not in present:
+                self.tree.delete(item)
         if selected and self.tree.exists(selected[0]):
             self.tree.selection_set(selected[0])
+
+    def _missing_job_paths(self, job: JobRecord) -> list[str]:
+        required: list[tuple[str, Path | None]] = [("source", job.source_media)]
+        if job.kind is JobKind.MERGE:
+            required.append(("video 2", job.secondary_media))
+        else:
+            required.extend((("PPTX", job.pptx), ("timeline", job.timeline)))
+            if job.status in {JobStatus.WAITING, JobStatus.RUNNING}:
+                settings = self.controller.settings
+                required.extend((("logo", settings.logo), ("outro", settings.outro)))
+        missing = [
+            label
+            for label, path in required
+            if path is not None and not Path(path).is_file()
+        ]
+        if not job.output_directory.is_dir():
+            missing.append("output folder")
+        return missing
+
+    def _job_files_summary(self, job: JobRecord) -> str:
+        parts: list[str] = []
+        missing = self._missing_job_paths(job)
+        if missing:
+            parts.append(f"Missing: {', '.join(missing)}")
+        if job.status is JobStatus.COMPLETED:
+            parts.append(
+                "Output ready" if job.output_path.is_file() else "Output missing"
+            )
+        elif job.output_path.exists():
+            parts.append("Output exists")
+        return "; ".join(parts) or "Ready"
+
+    def _waiting_job_ready(self, job: JobRecord) -> bool:
+        return (
+            job.status is JobStatus.WAITING
+            and not self._missing_job_paths(job)
+            and not job.output_path.exists()
+        )
+
+    def _refresh_path_indicators(self) -> None:
+        for binding in self._path_bindings:
+            raw = binding.variable.get().strip()
+            if not raw:
+                binding.indicator.configure(
+                    text="Optional" if binding.optional else "Required",
+                    style="Path.Empty.TLabel",
+                )
+                continue
+            path = Path(raw).expanduser()
+            available = path.is_dir() if binding.kind == "directory" else path.is_file()
+            binding.indicator.configure(
+                text="Available" if available else "Missing",
+                style=("Path.Available.TLabel" if available else "Path.Missing.TLabel"),
+            )
+
+    def _poll_filesystem(self) -> None:
+        if self._closing:
+            return
+        self._refresh_path_indicators()
+        restored = self.controller.restore_available_path_jobs()
+        jobs = self.controller.jobs()
+        current_readiness = {
+            job.id: self._waiting_job_ready(job)
+            for job in jobs
+            if job.status is JobStatus.WAITING
+        }
+        became_ready = any(
+            ready and self._waiting_readiness.get(job_id) is False
+            for job_id, ready in current_readiness.items()
+        )
+        self._waiting_readiness = current_readiness
+        if restored:
+            self.status_var.set(
+                f"Restored {len(restored)} job(s) after files became available"
+            )
+        if restored or became_ready:
+            self.worker.wake()
+        self.refresh_jobs()
+        self.root.after(1000, self._poll_filesystem)
 
     def _selected_id(self) -> str:
         if not hasattr(self, "tree") or not self.tree.selection():
@@ -448,6 +606,8 @@ class WorkflowApp:
         self._closing = True
         if hasattr(self, "add_button"):
             self.add_button.configure(state="disabled")
+        if hasattr(self, "merge_button"):
+            self.merge_button.configure(state="disabled")
         self.worker.stop(timeout=10)
         self._finish_close()
 
