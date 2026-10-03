@@ -55,10 +55,87 @@ def _normalized(image: Image.Image) -> Image.Image:
     return ImageOps.autocontrast(grayscale.resize((160, 90), Image.Resampling.LANCZOS))
 
 
-def image_similarity(left: Image.Image, right: Image.Image) -> float:
-    difference = ImageChops.difference(_normalized(left), _normalized(right))
+def _normalized_similarity(left: Image.Image, right: Image.Image) -> float:
+    difference = ImageChops.difference(left, right)
     mean_difference = ImageStat.Stat(difference).mean[0]
     return max(0.0, min(1.0, 1.0 - mean_difference / 255.0))
+
+
+def _notebook_slide_region(image: Image.Image) -> Image.Image | None:
+    width, height = image.size
+    if width < 640 or height < 360 or abs(width / height - 16 / 9) > 0.05:
+        return None
+    return image.crop(
+        (
+            round(width * 0.2328),
+            round(height * 0.1417),
+            round(width * 0.7672),
+            round(height * 0.6722),
+        )
+    )
+
+
+def _longest_run(indices: Sequence[int]) -> tuple[int, int] | None:
+    if not indices:
+        return None
+    best = (indices[0], indices[0])
+    start = prior = indices[0]
+    for value in indices[1:]:
+        if value != prior + 1:
+            if prior - start > best[1] - best[0]:
+                best = (start, prior)
+            start = value
+        prior = value
+    if prior - start > best[1] - best[0]:
+        best = (start, prior)
+    return best
+
+
+def _detected_dark_slide_region(image: Image.Image) -> Image.Image | None:
+    width, height = image.size
+    if width < 640 or height < 360:
+        return None
+    sample = image.convert("L").resize((160, 90), Image.Resampling.BILINEAR)
+    pixels = sample.load()
+    dark = [[pixels[x, y] < 175 for x in range(160)] for y in range(90)]
+    rows = [y for y in range(90) if sum(dark[y]) >= 24]
+    row_run = _longest_run(rows)
+    if row_run is None or row_run[1] - row_run[0] < 18:
+        return None
+    top, bottom = row_run
+    run_height = bottom - top + 1
+    columns = [
+        x
+        for x in range(160)
+        if sum(dark[y][x] for y in range(top, bottom + 1)) >= run_height * 0.55
+    ]
+    column_run = _longest_run(columns)
+    if column_run is None or column_run[1] - column_run[0] < 45:
+        return None
+    left, right = column_run
+    crop = (
+        max(0, math.floor(left * width / 160)),
+        max(0, math.floor(top * height / 90)),
+        min(width, math.ceil((right + 1) * width / 160)),
+        min(height, math.ceil((bottom + 1) * height / 90)),
+    )
+    return image.crop(crop)
+
+
+def _candidate_views(image: Image.Image) -> tuple[Image.Image, ...]:
+    views = [image]
+    for embedded in (_notebook_slide_region(image), _detected_dark_slide_region(image)):
+        if embedded is not None:
+            views.append(embedded)
+    return tuple(views)
+
+
+def image_similarity(left: Image.Image, right: Image.Image) -> float:
+    normalized_right = _normalized(right)
+    return max(
+        _normalized_similarity(_normalized(view), normalized_right)
+        for view in _candidate_views(left)
+    )
 
 
 def monotonic_matches(
@@ -66,7 +143,17 @@ def monotonic_matches(
 ) -> list[SampleMatch]:
     if not frames or not slides:
         raise AlignmentError("alignment requires at least one frame and one slide")
-    score_rows = [[image_similarity(frame, slide) for slide in slides] for frame in frames]
+    normalized_slides = [_normalized(slide) for slide in slides]
+    normalized_frames = [
+        [_normalized(view) for view in _candidate_views(frame)] for frame in frames
+    ]
+    score_rows = [
+        [
+            max(_normalized_similarity(view, slide) for view in frame_views)
+            for slide in normalized_slides
+        ]
+        for frame_views in normalized_frames
+    ]
     previous = score_rows[0][:]
     parents: list[list[int]] = [[-1] * len(slides)]
     transition_penalty = 0.015

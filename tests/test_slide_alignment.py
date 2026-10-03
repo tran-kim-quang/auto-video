@@ -47,6 +47,32 @@ def test_similarity_scores_identical_image_above_different_pattern(tmp_path: Pat
     assert different < 0.8
 
 
+def test_similarity_detects_slide_embedded_above_notebook_caption(tmp_path: Path) -> None:
+    slide_path = _pattern(tmp_path / "slide.png", "left")
+    slide = Image.open(slide_path).resize((684, 382))
+    notebook_frame = Image.new("RGB", (1280, 720), "white")
+    notebook_frame.paste(slide, (298, 102))
+    ImageDraw.Draw(notebook_frame).text((350, 550), "generated narration caption", fill="black")
+
+    score = slide_alignment.image_similarity(notebook_frame, Image.open(slide_path))
+
+    assert score > 0.9
+
+
+def test_similarity_detects_smaller_slide_left_of_notebook_caption() -> None:
+    slide = Image.new("RGB", (1280, 720), "#123b34")
+    draw = ImageDraw.Draw(slide)
+    draw.rectangle((100, 100, 1180, 620), outline="white", width=8)
+    draw.text((180, 260), "lesson content", fill="white")
+    notebook_frame = Image.new("RGB", (1280, 720), "white")
+    notebook_frame.paste(slide.resize((448, 252)), (77, 235))
+    ImageDraw.Draw(notebook_frame).text((700, 330), "large narration caption", fill="black")
+
+    score = slide_alignment.image_similarity(notebook_frame, slide)
+
+    assert score > 0.9
+
+
 def test_monotonic_matching_never_moves_back_to_an_earlier_slide(tmp_path: Path) -> None:
     left = Image.open(_pattern(tmp_path / "left.png", "left"))
     right = Image.open(_pattern(tmp_path / "right.png", "right"))

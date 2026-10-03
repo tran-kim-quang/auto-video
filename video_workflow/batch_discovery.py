@@ -16,20 +16,26 @@ def _matches(files: list[Path], pattern: str) -> list[Path]:
 
 def discover_lessons(root: Path) -> tuple[list[LessonInputs], list[LessonResult]]:
     root = Path(root)
-    folders: list[tuple[int, Path]] = []
-    for path in root.iterdir():
+    folders: list[tuple[tuple[str, ...], int, Path]] = []
+    for path in root.rglob("*"):
         match = _LESSON_RE.fullmatch(path.name)
-        if path.is_dir() and match:
-            folders.append((int(match.group("number")), path))
+        relative_parts = path.relative_to(root).parts
+        if (
+            path.is_dir()
+            and match
+            and not any(part.lower() == "output" for part in relative_parts)
+        ):
+            parent_key = tuple(part.casefold() for part in relative_parts[:-1])
+            folders.append((parent_key, int(match.group("number")), path))
 
     lessons: list[LessonInputs] = []
     errors: list[LessonResult] = []
-    for _, folder in sorted(folders, key=lambda item: item[0]):
+    for _, _, folder in sorted(folders, key=lambda item: (item[0], item[1])):
         name = folder.name
         files = [path for path in folder.iterdir() if path.is_file()]
         expected = (
-            ("part 1 video", rf"P1_{re.escape(name)}_V8\.mp4"),
-            ("part 2 video", rf"P2_{re.escape(name)}_V8\.mp4"),
+            ("part 1 video", rf"P1_{re.escape(name)}_+V\d+\.mp4"),
+            ("part 2 video", rf"P2_{re.escape(name)}_+V\d+\.mp4"),
             ("part 1 PPTX", rf"{re.escape(name)}_1_Slide\.pptx"),
             ("part 2 PPTX", rf"{re.escape(name)}_2_Slide\.pptx"),
         )

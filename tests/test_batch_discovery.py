@@ -83,3 +83,32 @@ def test_discovery_does_not_recurse_into_output(tmp_path: Path) -> None:
 
     assert len(lessons) == 1
     assert errors == []
+
+
+def test_discovers_nested_lessons_and_grade_suffix_without_scanning_output(
+    tmp_path: Path,
+) -> None:
+    nested = tmp_path / "Van12" / "Bài 1" / "T1"
+    nested.mkdir(parents=True)
+    for filename in (
+        "P1_T1__V12.mp4",
+        "P2_T1_V12.mp4",
+        "T1_1_Slide.pptx",
+        "T1_2_Slide.pptx",
+    ):
+        (nested / filename).touch()
+    hidden = tmp_path / "Van12" / "output" / "T2"
+    hidden.mkdir(parents=True)
+    for filename in (
+        "P1_T2_V12.mp4",
+        "P2_T2_V12.mp4",
+        "T2_1_Slide.pptx",
+        "T2_2_Slide.pptx",
+    ):
+        (hidden / filename).touch()
+
+    lessons, errors = discover_lessons(tmp_path)
+
+    assert errors == []
+    assert [lesson.root for lesson in lessons] == [nested]
+    assert lessons[0].part1_video.name == "P1_T1__V12.mp4"

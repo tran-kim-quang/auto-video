@@ -114,6 +114,57 @@ Các tùy chọn:
 
 Tool không ghi đè output có sẵn. Khi thành công, file `<output>.report.json` chứa đường dẫn đầu vào (asset bị bỏ qua có giá trị `null`), mốc cắt audio nguồn, số slide, thời lượng outro (`0` nếu không dùng), thời lượng mong đợi và các kiểm tra đầu ra.
 
+## Batch hai phần tự nhận diện timeline
+
+Trên Ubuntu, lệnh batch mặc định quét đệ quy các thư mục `T<number>` trong
+`/home/meconlonton/Documents/gen_video` và bỏ qua mọi thư mục `output`:
+
+```bash
+.venv/bin/build-video-batch
+```
+
+Mỗi thư mục cần đúng bốn file theo tên của bài. Hậu tố lớp có thể là `V8`,
+`V12` hoặc một số lớp khác; ví dụ với `T8` lớp 8:
+
+```text
+P1_T8_V8.mp4
+P2_T8_V8.mp4
+T8_1_Slide.pptx
+T8_2_Slide.pptx
+```
+
+Logo `logo.png` và outro `Outro720.mp4` mặc định được đọc từ
+`/home/meconlonton/work/auto-video/test/logo_and_outro`. Có thể đổi hai thư
+mục đầu vào mà không có tùy chọn ghi đè:
+
+```bash
+.venv/bin/build-video-batch \
+  --source-root /duong/dan/gen_video \
+  --assets-dir /duong/dan/logo_and_outro
+```
+
+Workflow ghép hai deck thành 40 slide, tự so khớp khung hình video với ảnh
+slide để sinh timeline, dựng P1 bằng slide 1–20 với logo, dựng P2 bằng slide
+21–40 với logo và outro, rồi nối hai phần. Kết quả của mỗi bài nằm trong
+`Tn/output`:
+
+```text
+Tn_Slide.pptx
+slide-images/
+P1_Tn_timeline.json
+P2_Tn_timeline.json
+alignment-report.json
+P1_Tn_slide.mp4
+P2_Tn_slide.mp4
+Tn_final.mp4
+```
+
+Nếu `Tn_final.mp4` đã tồn tại và qua kiểm tra media thì cả bài được bỏ qua.
+Nếu lần chạy trước dừng giữa chừng, các PPTX, timeline và video trung gian hợp
+lệ được tái sử dụng. Lỗi input hoặc độ tin cậy nhận diện thấp được in riêng
+cho từng bài; các bài còn lại vẫn tiếp tục chạy. Lệnh trả mã `1` nếu có ít
+nhất một bài lỗi.
+
 ## Timeline
 
 TXT:
