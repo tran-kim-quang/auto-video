@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from video_workflow.cli import main
-from video_workflow.pipeline import BuildRequest, WorkflowError, build_video
+from video_workflow.pipeline import BuildRequest, WorkflowError, _verify_final, build_video
 from video_workflow.probe import MediaInfo
 
 
@@ -95,6 +95,21 @@ def test_existing_output_is_not_overwritten(tmp_path: Path) -> None:
         build_video(request)
 
     assert request.output.read_bytes() == b"keep-me"
+
+
+def test_final_validation_accepts_container_fps_rounding() -> None:
+    info = replace(_media(524_917), fps=Fraction(151164, 6299))
+
+    checks = _verify_final(info, expected_duration_ms=524_917, fps=24)
+
+    assert "video_24fps" in checks
+
+
+def test_final_validation_rejects_meaningful_fps_difference() -> None:
+    info = replace(_media(524_917), fps=Fraction(239, 10))
+
+    with pytest.raises(WorkflowError, match="expected 24 fps"):
+        _verify_final(info, expected_duration_ms=524_917, fps=24)
 
 
 def test_phase_failure_publishes_no_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

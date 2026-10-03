@@ -4,7 +4,6 @@ import json
 import tempfile
 import threading
 from dataclasses import asdict, dataclass
-from fractions import Fraction
 from pathlib import Path
 from collections.abc import Callable
 
@@ -75,7 +74,7 @@ def _validate_paths(request: BuildRequest) -> None:
 def _verify_final(info: MediaInfo, expected_duration_ms: int, fps: int) -> list[str]:
     if (info.width, info.height) != (1280, 720):
         raise WorkflowError(f"final video is {info.width}x{info.height}, expected 1280x720")
-    if info.fps != Fraction(fps, 1):
+    if info.fps is None or abs(float(info.fps) - fps) > 0.01:
         raise WorkflowError(f"final video is {info.fps} fps, expected {fps} fps")
     if not info.has_audio or info.video_codec != "h264" or info.audio_codec != "aac":
         raise WorkflowError("final video must contain H.264 video and AAC audio")
