@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
@@ -102,8 +103,9 @@ def _run_lesson(
     outro: Path,
 ) -> LessonResult:
     outputs = lesson_outputs(lesson)
+    label = lesson.root.relative_to(request.source_root).as_posix()
     if _valid_video(outputs.final_video, request.fps):
-        return LessonResult(lesson.name, "skipped", outputs.final_video)
+        return LessonResult(label, "skipped", outputs.final_video)
 
     outputs.output_dir.mkdir(parents=True, exist_ok=True)
     if outputs.final_video.exists():
@@ -192,13 +194,20 @@ def _run_lesson(
     )
     if not _valid_video(outputs.final_video, request.fps):
         raise RuntimeError("final video failed media validation")
-    return LessonResult(lesson.name, "completed", outputs.final_video)
+    return LessonResult(label, "completed", outputs.final_video)
 
 
-def run_batch(request: BatchRequest) -> BatchReport:
+def run_batch(
+    request: BatchRequest,
+    *,
+    on_result: Callable[[LessonResult], None] | None = None,
+) -> BatchReport:
     request = BatchRequest(Path(request.source_root), Path(request.assets_dir), request.fps)
     lessons, discovery_errors = discover_lessons(request.source_root)
     results = list(discovery_errors)
+    if on_result is not None:
+        for result in discovery_errors:
+            on_result(result)
     logo = request.assets_dir / "logo.png"
     outro = request.assets_dir / "Outro720.mp4"
     for lesson in lessons:
@@ -207,9 +216,11 @@ def run_batch(request: BatchRequest) -> BatchReport:
                 raise FileNotFoundError(f"missing logo: {logo}")
             if not outro.is_file():
                 raise FileNotFoundError(f"missing outro: {outro}")
-            results.append(_run_lesson(lesson, request, logo, outro))
+            result = _run_lesson(lesson, request, logo, outro)
         except Exception as exc:
-            results.append(LessonResult(lesson.name, "failed", error=str(exc)))
-    results.sort(key=lambda item: int(item.lesson[1:]) if item.lesson[1:].isdigit() else item.lesson)
+            label = lesson.root.relative_to(request.source_root).as_posix()
+            result = LessonResult(label, "failed", error=str(exc))
+        results.append(result)
+        if on_result is not None:
+            on_result(result)
     return BatchReport(results)
-

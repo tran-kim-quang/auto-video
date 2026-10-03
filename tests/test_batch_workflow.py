@@ -213,3 +213,21 @@ def test_failure_in_one_lesson_does_not_stop_next(tmp_path: Path, monkeypatch: p
         ("T9", "completed"),
     ]
 
+
+def test_nested_lesson_result_uses_relative_path_and_is_reported_immediately(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lesson = _lesson(tmp_path / "source" / "Van8", "T8")
+    assets = _assets(tmp_path / "assets")
+    final = lesson / "output" / "T8_final.mp4"
+    final.parent.mkdir()
+    final.write_bytes(b"valid")
+    monkeypatch.setattr(batch_workflow, "probe_media", lambda _: _media())
+    emitted = []
+
+    report = batch_workflow.run_batch(
+        BatchRequest(tmp_path / "source", assets), on_result=emitted.append
+    )
+
+    assert [item.lesson for item in emitted] == ["Van8/T8"]
+    assert report.results == emitted

@@ -51,7 +51,13 @@ def discover_lessons(root: Path) -> tuple[list[LessonInputs], list[LessonResult]
                 break
             resolved.append(matches[0])
         if problem is not None:
-            errors.append(LessonResult(lesson=name, status="failed", error=problem))
+            errors.append(
+                LessonResult(
+                    lesson=folder.relative_to(root).as_posix(),
+                    status="failed",
+                    error=problem,
+                )
+            )
             continue
         lessons.append(
             LessonInputs(

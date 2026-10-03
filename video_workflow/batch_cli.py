@@ -21,10 +21,15 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    report = run_batch(BatchRequest(args.source_root, args.assets_dir, args.fps))
-    for result in report.results:
+
+    def print_result(result) -> None:
         detail = f" - {result.error}" if result.error else ""
-        print(f"{result.lesson}: {result.status}{detail}")
+        print(f"{result.lesson}: {result.status}{detail}", flush=True)
+
+    report = run_batch(
+        BatchRequest(args.source_root, args.assets_dir, args.fps),
+        on_result=print_result,
+    )
     completed = sum(item.status == "completed" for item in report.results)
     skipped = sum(item.status == "skipped" for item in report.results)
     failed = sum(item.status == "failed" for item in report.results)
@@ -34,4 +39,3 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
