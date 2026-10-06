@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import threading
 from dataclasses import asdict, dataclass
@@ -33,6 +34,7 @@ class BuildRequest:
     logo_width_ratio: float = 0.12
     margin_px: int = 0
     write_report: bool = True
+    overwrite_output: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,7 +60,7 @@ def _validate_paths(request: BuildRequest) -> None:
         path = getattr(request, label)
         if path is not None and not Path(path).is_file():
             raise WorkflowError(f"{label} file does not exist: {path}")
-    if request.output.exists():
+    if request.output.exists() and not request.overwrite_output:
         raise WorkflowError(f"output already exists: {request.output}")
     report_path = Path(f"{request.output}.report.json")
     if request.write_report and report_path.exists():
@@ -88,6 +90,26 @@ def _verify_final(info: MediaInfo, expected_duration_ms: int, fps: int) -> list[
     return ["video_1280x720", f"video_{fps}fps", "h264_aac_streams", "duration"]
 
 
+def _publish_video(staged: Path, output: Path, *, overwrite: bool) -> None:
+    if overwrite:
+        staged.replace(output)
+        return
+    try:
+        if os.name == "nt":
+            staged.rename(output)
+        else:
+            os.link(staged, output)
+            staged.unlink()
+    except FileExistsError as exc:
+        raise WorkflowError(f"output already exists: {output}") from exc
+    except OSError as exc:
+        if output.exists():
+            raise WorkflowError(f"output already exists: {output}") from exc
+        raise WorkflowError(
+            f"could not publish output without overwriting: {output}: {exc}"
+        ) from exc
+
+
 def build_video(
     request: BuildRequest,
     *,
@@ -106,6 +128,7 @@ def build_video(
         logo_width_ratio=request.logo_width_ratio,
         margin_px=request.margin_px,
         write_report=request.write_report,
+        overwrite_output=request.overwrite_output,
     )
     def check_cancelled() -> None:
         if cancel_event is not None and cancel_event.is_set():
@@ -211,9 +234,14 @@ def build_video(
                     json.dumps(asdict(report), ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8",
                 )
-            else:
+            check_cancelled()
+            if not request.write_report:
                 report_path.unlink(missing_ok=True)
-            staged_final.replace(request.output)
+            _publish_video(
+                staged_final,
+                request.output,
+                overwrite=request.overwrite_output,
+            )
             if staged_report is not None:
                 staged_report.replace(report_path)
             return report

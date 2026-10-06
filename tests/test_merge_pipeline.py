@@ -10,7 +10,20 @@ from PIL import Image
 from video_workflow import merge_pipeline
 from video_workflow.merge_pipeline import MergeRequest
 from video_workflow.pipeline import WorkflowError
-from video_workflow.probe import probe_media
+from video_workflow.probe import MediaInfo, probe_media
+
+
+def _media(duration_ms: int) -> MediaInfo:
+    return MediaInfo(
+        duration_ms=duration_ms,
+        width=1280,
+        height=720,
+        fps=24,
+        audio_duration_ms=duration_ms,
+        has_audio=True,
+        video_codec="h264",
+        audio_codec="aac",
+    )
 
 
 def _make_video(
@@ -132,3 +145,32 @@ def test_merge_videos_rejects_missing_input_without_creating_output(
         )
 
     assert not output.exists()
+
+
+def test_merge_output_created_during_render_is_not_overwritten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = tmp_path / "first.mp4"
+    second = tmp_path / "second.mp4"
+    output = tmp_path / "merged.mp4"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    monkeypatch.setattr(
+        "video_workflow.merge_pipeline.probe_media",
+        lambda path: _media(1000 if Path(path) in {first, second} else 2000),
+    )
+    monkeypatch.setattr(
+        "video_workflow.merge_pipeline.normalize_video",
+        lambda _source, target, **_kwargs: Path(target).write_bytes(b"normalized"),
+    )
+
+    def join_with_late_output(_first, _second, target, **_kwargs) -> None:
+        Path(target).write_bytes(b"merged")
+        output.write_bytes(b"late-output")
+
+    monkeypatch.setattr("video_workflow.merge_pipeline.join_parts", join_with_late_output)
+
+    with pytest.raises(WorkflowError, match="already exists"):
+        merge_pipeline.merge_videos(MergeRequest(first, second, output))
+
+    assert output.read_bytes() == b"late-output"

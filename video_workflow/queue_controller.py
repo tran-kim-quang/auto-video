@@ -64,7 +64,7 @@ class QueueController:
                 return f"{label} file does not exist: {path}"
         if not job.output_directory.is_dir():
             return f"output directory does not exist: {job.output_directory}"
-        if job.output_path.exists():
+        if job.output_path.exists() and not job.overwrite_output:
             return f"output already exists: {job.output_path}"
         return None
 
@@ -78,6 +78,7 @@ class QueueController:
         output_directory: Path,
         write_report: bool = True,
         use_outro: bool = True,
+        overwrite_output: bool = False,
     ) -> JobRecord:
         job = JobRecord.new(
             source_media=source_media,
@@ -87,6 +88,7 @@ class QueueController:
             output_directory=output_directory,
             write_report=write_report,
             use_outro=use_outro,
+            overwrite_output=overwrite_output,
         )
         error = self._validate_job_paths(job)
         if error:

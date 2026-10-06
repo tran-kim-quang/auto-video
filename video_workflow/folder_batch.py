@@ -146,10 +146,6 @@ def discover_folder_jobs(root: Path) -> FolderScanResult:
     return FolderScanResult(tuple(jobs), tuple(issues))
 
 
-def _path_key(path: Path) -> str:
-    return os.path.normcase(str(path.absolute()))
-
-
 def _delete_reports(root: Path) -> list[FolderIssue]:
     issues: list[FolderIssue] = []
     if not root.is_dir():
@@ -180,17 +176,10 @@ def queue_folder_jobs(
     skipped: list[Path] = []
     issues = list(scan.issues)
     issues.extend(_delete_reports(root))
-    known_outputs = {_path_key(job.output_path) for job in controller.jobs()}
 
     for candidate in scan.jobs:
         output = candidate.output
         try:
-            if output.exists():
-                skipped.append(output)
-                continue
-            if _path_key(output) in known_outputs:
-                skipped.append(output)
-                continue
             output.parent.mkdir(parents=True, exist_ok=True)
             job = controller.enqueue(
                 source_media=candidate.source_media,
@@ -200,11 +189,11 @@ def queue_folder_jobs(
                 output_directory=output.parent,
                 write_report=False,
                 use_outro=candidate.part == 2,
+                overwrite_output=True,
             )
         except (OSError, ValueError) as exc:
             issues.append(FolderIssue(candidate.pptx.parent, str(exc)))
             continue
         queued.append(job)
-        known_outputs.add(_path_key(output))
 
     return FolderQueueResult(tuple(queued), tuple(skipped), tuple(issues))

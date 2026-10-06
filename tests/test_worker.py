@@ -177,8 +177,10 @@ def test_worker_builds_job_without_global_assets(tmp_path: Path) -> None:
     assert requests[0].outro is None
 
 
-def test_worker_passes_batch_report_setting_to_slide_builder(tmp_path: Path) -> None:
+def test_worker_passes_batch_output_settings_to_slide_builder(tmp_path: Path) -> None:
     controller = _controller(tmp_path, 0)
+    existing_output = tmp_path / "output" / "lesson_1.mp4"
+    existing_output.write_bytes(b"previous-video")
     controller.enqueue(
         source_media=tmp_path / "source.mp3",
         pptx=tmp_path / "slides.pptx",
@@ -186,6 +188,7 @@ def test_worker_passes_batch_report_setting_to_slide_builder(tmp_path: Path) -> 
         output_name="lesson_1",
         output_directory=tmp_path / "output",
         write_report=False,
+        overwrite_output=True,
     )
     requests = []
     worker = QueueWorker(
@@ -201,6 +204,8 @@ def test_worker_passes_batch_report_setting_to_slide_builder(tmp_path: Path) -> 
         worker.stop(timeout=1)
 
     assert requests[0].write_report is False
+    assert requests[0].overwrite_output is True
+    assert existing_output.read_bytes() == b"previous-video"
 
 
 def test_worker_uses_global_outro_for_part_2_only(tmp_path: Path) -> None:
@@ -259,6 +264,64 @@ def test_stop_cancels_build_marks_interrupted_and_balances_com(
     assert not worker.is_alive()
     assert controller.jobs()[0].status is JobStatus.INTERRUPTED
     assert com_calls == ["init", "uninit"]
+
+
+def test_stop_after_publish_boundary_allows_worker_to_complete(tmp_path: Path) -> None:
+    controller = _controller(tmp_path, 1)
+    published = threading.Event()
+    release = threading.Event()
+
+    def build(request, **_kwargs):
+        request.output.write_bytes(b"published")
+        published.set()
+        release.wait(1)
+
+    worker = QueueWorker(controller, build=build)
+    worker.start()
+    assert published.wait(1)
+    stopper = threading.Thread(target=worker.stop, kwargs={"timeout": 1})
+    stopper.start()
+    assert worker._cancel.wait(1)
+    release.set()
+    stopper.join(1)
+
+    assert not stopper.is_alive()
+    assert controller.jobs()[0].status is JobStatus.COMPLETED
+
+
+def test_stop_between_claim_and_cancel_reset_is_not_lost(tmp_path: Path) -> None:
+    controller = _controller(tmp_path, 1)
+    claimed = threading.Event()
+    release_claim = threading.Event()
+    original_claim_next = controller.claim_next
+
+    def blocking_claim_next():
+        job = original_claim_next()
+        if job is not None:
+            claimed.set()
+            release_claim.wait(1)
+        return job
+
+    controller.claim_next = blocking_claim_next
+    cancel_states: list[bool] = []
+
+    def build(_request, *, cancel_event, **_kwargs):
+        cancel_states.append(cancel_event.is_set())
+        if cancel_event.is_set():
+            raise WorkflowCancelled("cancelled")
+
+    worker = QueueWorker(controller, build=build)
+    worker.start()
+    assert claimed.wait(1)
+    stopper = threading.Thread(target=worker.stop, kwargs={"timeout": 1})
+    stopper.start()
+    assert worker._stop.wait(1)
+    release_claim.set()
+    stopper.join(1)
+
+    assert not stopper.is_alive()
+    assert cancel_states == [True]
+    assert controller.jobs()[0].status is JobStatus.INTERRUPTED
 
 
 def test_worker_com_context_is_noop_on_linux(

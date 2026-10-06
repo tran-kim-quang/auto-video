@@ -189,7 +189,17 @@ def test_existing_batch_jobs_infer_outro_from_part_suffix(tmp_path: Path) -> Non
         write_report=False,
     ).to_dict()
     part1.pop("use_outro")
+    part1.pop("overwrite_output")
     part2 = dict(part1, output_name="TOAN8_B1_T1_2.mp4")
 
     assert JobRecord.from_dict(part1).use_outro is False
     assert JobRecord.from_dict(part2).use_outro is True
+    assert JobRecord.from_dict(part1).overwrite_output is True
+    assert JobRecord.from_dict(part2).overwrite_output is True
+
+
+def test_legacy_manual_job_does_not_enable_output_overwrite(tmp_path: Path) -> None:
+    payload = _job(tmp_path).to_dict()
+    payload.pop("overwrite_output")
+
+    assert JobRecord.from_dict(payload).overwrite_output is False

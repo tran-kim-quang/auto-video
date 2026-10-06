@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .compose import CompositionCancelled, join_parts, normalize_video
-from .pipeline import WorkflowCancelled, WorkflowError, _verify_final
+from .pipeline import WorkflowCancelled, WorkflowError, _publish_video, _verify_final
 from .probe import probe_media
 
 
@@ -131,7 +131,8 @@ def merge_videos(
                 json.dumps(asdict(report), ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
             )
-            staged_final.replace(request.output)
+            check_cancelled()
+            _publish_video(staged_final, request.output, overwrite=False)
             staged_report.replace(Path(f"{request.output}.report.json"))
             return report
     except (WorkflowCancelled, CompositionCancelled) as exc:

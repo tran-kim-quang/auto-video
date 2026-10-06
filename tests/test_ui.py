@@ -282,6 +282,24 @@ def test_part_1_file_status_does_not_require_global_outro(tmp_path: Path) -> Non
     assert "outro" not in app._missing_job_paths(job)
 
 
+def test_waiting_batch_job_can_overwrite_an_existing_output(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    for name in ("source.mp4", "slides.pptx", "timeline.txt"):
+        (tmp_path / name).write_bytes(b"input")
+    job = JobRecord.new(
+        source_media=tmp_path / "source.mp4",
+        pptx=tmp_path / "slides.pptx",
+        timeline=tmp_path / "timeline.txt",
+        output_name="lesson_1",
+        output_directory=tmp_path,
+        overwrite_output=True,
+    )
+    job.output_path.write_bytes(b"previous-video")
+
+    assert app._waiting_job_ready(job) is True
+    assert app._job_files_summary(job) == "Will overwrite output"
+
+
 def test_batch_tab_guide_contains_folder_and_file_naming_example() -> None:
     guide = ui_module.BATCH_FOLDER_GUIDE
 
@@ -294,3 +312,4 @@ def test_batch_tab_guide_contains_folder_and_file_naming_example() -> None:
     assert "TOAN7_C4_B13_T38_2.txt" in guide
     assert "output/TOAN7_C4_B13_T38_2.mp4" in guide
     assert "Outro: chỉ part 2" in guide
+    assert "Mỗi lần scan đều thêm job mới" in guide

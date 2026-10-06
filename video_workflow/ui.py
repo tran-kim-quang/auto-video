@@ -29,7 +29,8 @@ BATCH_FOLDER_GUIDE = """Quy ước đặt tên (ứng dụng quét đệ quy và
 • Mỗi PPTX phải kết thúc bằng _1 hoặc _2; media dùng đúng cùng tên.
 • Timeline: <tên PPTX>.txt/json hoặc timeline_slide_<tên PPTX>.txt/json.
 • Output tự tạo: output/TOAN7_C4_B13_T38_1.mp4, output/TOAN7_C4_B13_T38_2.mp4
-• Outro: chỉ part 2. Logo: cả hai part."""
+• Outro: chỉ part 2. Logo: cả hai part.
+• Mỗi lần scan đều thêm job mới; output cũ chỉ được thay sau khi dựng thành công."""
 
 
 def application_data_root() -> Path:
@@ -589,14 +590,16 @@ class WorkflowApp:
                 "Output ready" if job.output_path.is_file() else "Output missing"
             )
         elif job.output_path.exists():
-            parts.append("Output exists")
+            parts.append(
+                "Will overwrite output" if job.overwrite_output else "Output exists"
+            )
         return "; ".join(parts) or "Ready"
 
     def _waiting_job_ready(self, job: JobRecord) -> bool:
         return (
             job.status is JobStatus.WAITING
             and not self._missing_job_paths(job)
-            and not job.output_path.exists()
+            and (job.overwrite_output or not job.output_path.exists())
         )
 
     def _refresh_path_indicators(self) -> None:

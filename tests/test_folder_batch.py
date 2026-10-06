@@ -103,7 +103,7 @@ def test_reports_direct_timeline_without_a_pptx(tmp_path: Path) -> None:
     ]
 
 
-def test_queues_new_outputs_skips_existing_or_queued_and_deletes_stale_report(
+def test_rescan_queues_every_job_and_keeps_existing_video_until_render(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "Toan8"
@@ -127,19 +127,22 @@ def test_queues_new_outputs_skips_existing_or_queued_and_deletes_stale_report(
     second = queue_folder_jobs(controller, root)
 
     assert [job.output_path for job in first.queued] == [
+        leaf / "output" / "TOAN8_B1_T1_1.mp4",
         leaf / "output" / "TOAN8_B1_T1_2.mp4"
     ]
-    assert first.queued[0].write_report is False
-    assert first.skipped == (existing,)
+    assert all(job.write_report is False for job in first.queued)
+    assert all(job.overwrite_output is True for job in first.queued)
+    assert first.skipped == ()
     assert not matching_report.exists()
     assert not stale_report.exists()
+    assert existing.read_bytes() == b"input"
     assert old_video.exists()
-    assert second.queued == ()
-    assert second.skipped == (
-        existing,
+    assert [job.output_path for job in second.queued] == [
+        leaf / "output" / "TOAN8_B1_T1_1.mp4",
         leaf / "output" / "TOAN8_B1_T1_2.mp4",
-    )
-    assert len(controller.jobs()) == 1
+    ]
+    assert second.skipped == ()
+    assert len(controller.jobs()) == 4
 
 
 def test_batch_marks_outro_for_part_2_only(tmp_path: Path) -> None:

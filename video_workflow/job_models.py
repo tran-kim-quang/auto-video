@@ -94,6 +94,7 @@ class JobRecord:
     secondary_media: Path | None = None
     write_report: bool = True
     use_outro: bool = True
+    overwrite_output: bool = False
     status: JobStatus = JobStatus.WAITING
     stage: JobStage | None = None
     error: str | None = None
@@ -111,6 +112,7 @@ class JobRecord:
         output_directory: Path,
         write_report: bool = True,
         use_outro: bool = True,
+        overwrite_output: bool = False,
         status: JobStatus = JobStatus.WAITING,
     ) -> JobRecord:
         return cls(
@@ -123,6 +125,7 @@ class JobRecord:
             output_directory=Path(output_directory),
             write_report=write_report,
             use_outro=use_outro,
+            overwrite_output=overwrite_output,
             status=status,
         )
 
@@ -168,6 +171,7 @@ class JobRecord:
             "output_directory": str(self.output_directory),
             "write_report": self.write_report,
             "use_outro": self.use_outro,
+            "overwrite_output": self.overwrite_output,
             "status": self.status.value,
             "stage": self.stage.value if self.stage else None,
             "error": self.error,
@@ -186,6 +190,11 @@ class JobRecord:
                 and Path(output_name).stem.casefold().endswith("_1")
             )
             use_outro = not is_existing_batch_part1
+        overwrite_output = (
+            bool(data["overwrite_output"])
+            if "overwrite_output" in data
+            else data.get("write_report") is False
+        )
         return cls(
             id=str(data["id"]),
             created_at=str(data["created_at"]),
@@ -200,6 +209,7 @@ class JobRecord:
             ),
             write_report=bool(data.get("write_report", True)),
             use_outro=use_outro,
+            overwrite_output=overwrite_output,
             status=JobStatus(data["status"]),
             stage=JobStage(data["stage"]) if data.get("stage") else None,
             error=data.get("error"),

@@ -124,6 +124,30 @@ def test_output_created_after_enqueue_fails_candidate_and_claims_next(
     assert first.output_path.read_bytes() == b"do-not-overwrite"
 
 
+def test_overwrite_jobs_with_the_same_existing_output_are_claimed_in_order(
+    tmp_path: Path,
+) -> None:
+    controller, files = _controller(tmp_path)
+    output = tmp_path / "out" / "lesson.mp4"
+    output.write_bytes(b"previous-video")
+    jobs = [
+        controller.enqueue(
+            source_media=files["source_media"],
+            pptx=files["pptx"],
+            timeline=files["timeline"],
+            output_name="lesson",
+            output_directory=tmp_path / "out",
+            overwrite_output=True,
+        )
+        for _ in range(2)
+    ]
+
+    assert controller.claim_next().id == jobs[0].id
+    controller.mark_completed(jobs[0].id)
+    assert controller.claim_next().id == jobs[1].id
+    assert output.read_bytes() == b"previous-video"
+
+
 def test_transitions_retry_remove_and_stage_rules(tmp_path: Path) -> None:
     controller, files = _controller(tmp_path)
     first = _enqueue(controller, files, tmp_path, "one")
