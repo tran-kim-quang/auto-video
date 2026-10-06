@@ -60,7 +60,9 @@ def _run_ffmpeg(
             log_handle.flush()
             log_handle.seek(0)
             detail = log_handle.read().strip()
-            raise CompositionError(f"{action} failed: {detail or f'ffmpeg exited with {process.returncode}'}")
+            raise CompositionError(
+                f"{action} failed: {detail or f'ffmpeg exited with {process.returncode}'}"
+            )
     except CompositionError:
         raise
     except OSError as exc:
@@ -98,7 +100,7 @@ def render_lecture(
     slides: Mapping[int, Path],
     spans: Sequence[FrameSpan],
     source_video: Path,
-    logo: Path,
+    logo: Path | None,
     target: Path,
     *,
     fps: int,
@@ -111,16 +113,17 @@ def render_lecture(
         raise CompositionError("cannot render a lecture without slide spans")
     if fps <= 0:
         raise CompositionError("fps must be positive")
-    if not 0 < logo_width_ratio <= 1:
-        raise CompositionError("logo width ratio must be between 0 and 1")
-    if margin_px < 0:
-        raise CompositionError("logo margin must not be negative")
+    if logo is not None:
+        if not 0 < logo_width_ratio <= 1:
+            raise CompositionError("logo width ratio must be between 0 and 1")
+        if margin_px < 0:
+            raise CompositionError("logo margin must not be negative")
     source_video = Path(source_video)
-    logo = Path(logo)
+    logo = Path(logo) if logo is not None else None
     target = Path(target)
     if not source_video.is_file():
         raise CompositionError(f"source video does not exist: {source_video}")
-    if not logo.is_file():
+    if logo is not None and not logo.is_file():
         raise CompositionError(f"logo does not exist: {logo}")
 
     expected_start = spans[0].start_frame
@@ -132,23 +135,47 @@ def render_lecture(
     if spans[0].start_frame != 0 or total_frames <= 0:
         raise CompositionError("slide frame spans must begin at frame zero")
     duration = total_frames / fps
-    logo_width = max(1, round(1280 * logo_width_ratio))
     target.parent.mkdir(parents=True, exist_ok=True)
 
-    with tempfile.TemporaryDirectory(prefix="slide-concat-", dir=target.parent) as temporary:
+    with tempfile.TemporaryDirectory(
+        prefix="slide-concat-", dir=target.parent
+    ) as temporary:
         concat_file = Path(temporary) / "slides.ffconcat"
         _write_slide_concat(concat_file, slides, spans, fps)
-        filter_graph = (
+        base_filter = (
             f"[0:v]scale=1280:720:force_original_aspect_ratio=decrease,"
             "pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=black,"
             "crop=1252:704:14:8,scale=1280:720,"
-            f"fps={fps},setsar=1[base];"
-            f"[1:v]scale={logo_width}:-1[logo];"
-            f"[base][logo]overlay=x=W-w-{margin_px}:y=H-h-{margin_px}:"
-            "eof_action=repeat:format=auto[v];"
-            f"[2:a:0]atrim=start=0:end={duration:.9f},asetpts=PTS-STARTPTS,"
-            "aresample=48000,aformat=sample_rates=48000:channel_layouts=stereo[a]"
+            f"fps={fps},setsar=1[base]"
         )
+        if logo is None:
+            media_inputs = ["-i", str(source_video.resolve())]
+            filter_graph = (
+                f"{base_filter};"
+                f"[base]null[v];"
+                f"[1:a:0]atrim=start=0:end={duration:.9f},asetpts=PTS-STARTPTS,"
+                "aresample=48000,aformat=sample_rates=48000:channel_layouts=stereo[a]"
+            )
+        else:
+            logo_width = max(1, round(1280 * logo_width_ratio))
+            media_inputs = [
+                "-loop",
+                "1",
+                "-framerate",
+                str(fps),
+                "-i",
+                str(logo.resolve()),
+                "-i",
+                str(source_video.resolve()),
+            ]
+            filter_graph = (
+                f"{base_filter};"
+                f"[1:v]scale={logo_width}:-1[logo];"
+                f"[base][logo]overlay=x=W-w-{margin_px}:y=H-h-{margin_px}:"
+                "eof_action=repeat:format=auto[v];"
+                f"[2:a:0]atrim=start=0:end={duration:.9f},asetpts=PTS-STARTPTS,"
+                "aresample=48000,aformat=sample_rates=48000:channel_layouts=stereo[a]"
+            )
         argv = [
             _ffmpeg(),
             "-hide_banner",
@@ -160,14 +187,7 @@ def render_lecture(
             "0",
             "-i",
             str(concat_file),
-            "-loop",
-            "1",
-            "-framerate",
-            str(fps),
-            "-i",
-            str(logo.resolve()),
-            "-i",
-            str(source_video.resolve()),
+            *media_inputs,
             "-filter_complex",
             filter_graph,
             "-map",
@@ -201,26 +221,28 @@ def render_lecture(
             "-y",
             str(target.resolve()),
         ]
-        _run_ffmpeg(argv, "lecture render", cancel_event=cancel_event, log_path=log_path)
+        _run_ffmpeg(
+            argv, "lecture render", cancel_event=cancel_event, log_path=log_path
+        )
     if not target.is_file() or target.stat().st_size == 0:
         raise CompositionError("lecture render did not produce an output file")
 
 
-def normalize_outro(
-    outro: Path,
+def normalize_video(
+    source_video: Path,
     target: Path,
     *,
     fps: int,
     cancel_event: threading.Event | None = None,
     log_path: Path | None = None,
 ) -> None:
-    outro = Path(outro)
+    source_video = Path(source_video)
     target = Path(target)
     if fps <= 0:
         raise CompositionError("fps must be positive")
-    info = probe_media(outro)
+    info = probe_media(source_video)
     if info.width is None or info.height is None:
-        raise CompositionError("outro does not contain a video stream")
+        raise CompositionError("source does not contain a video stream")
     duration = info.duration_ms / 1000
     total_frames = max(1, (info.duration_ms * fps + 500) // 1000)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -231,7 +253,7 @@ def normalize_outro(
         "-loglevel",
         "error",
         "-i",
-        str(outro.resolve()),
+        str(source_video.resolve()),
     ]
     audio_input = "0:a:0"
     if not info.has_audio:
@@ -285,9 +307,24 @@ def normalize_outro(
         "-y",
         str(target.resolve()),
     ]
-    _run_ffmpeg(argv, "outro normalization", cancel_event=cancel_event, log_path=log_path)
+    _run_ffmpeg(
+        argv, "video normalization", cancel_event=cancel_event, log_path=log_path
+    )
     if not target.is_file() or target.stat().st_size == 0:
-        raise CompositionError("outro normalization did not produce an output file")
+        raise CompositionError("video normalization did not produce an output file")
+
+
+def normalize_outro(
+    outro: Path,
+    target: Path,
+    *,
+    fps: int,
+    cancel_event: threading.Event | None = None,
+    log_path: Path | None = None,
+) -> None:
+    normalize_video(
+        outro, target, fps=fps, cancel_event=cancel_event, log_path=log_path
+    )
 
 
 def join_parts(
@@ -306,7 +343,9 @@ def join_parts(
             raise CompositionError(f"{label} file does not exist: {path}")
         info = probe_media(path)
         if not info.has_audio or info.width != 1280 or info.height != 720:
-            raise CompositionError(f"{label} is not a normalized 1280x720 video with audio")
+            raise CompositionError(
+                f"{label} is not a normalized 1280x720 video with audio"
+            )
     target.parent.mkdir(parents=True, exist_ok=True)
     filter_graph = (
         "[0:v]settb=AVTB,setpts=PTS-STARTPTS,format=yuv420p[v0];"

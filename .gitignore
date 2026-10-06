@@ -2,10 +2,13 @@
 .workflow_data/
 .pytest_cache/
 .superpowers/
+.worktrees/
 *.egg-info/
 __pycache__/
 *.py[cod]
 *.log
+build/
+dist/
 
 # Generated review outputs
 test/final-workflow*.mp4*

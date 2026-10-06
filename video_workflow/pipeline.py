@@ -4,12 +4,11 @@ import json
 import tempfile
 import threading
 from dataclasses import asdict, dataclass
-from fractions import Fraction
 from pathlib import Path
 from collections.abc import Callable
 
 from .compose import CompositionCancelled, join_parts, normalize_outro, render_lecture
-from .powerpoint import count_pptx_slides, export_slides
+from .slide_export import count_pptx_slides, export_slides
 from .probe import MediaInfo, probe_media
 from .timeline import parse_timeline, validate_timeline
 
@@ -27,18 +26,19 @@ class BuildRequest:
     source_media: Path
     pptx: Path
     timeline: Path
-    logo: Path
-    outro: Path
+    logo: Path | None
+    outro: Path | None
     output: Path
     fps: int = 24
     logo_width_ratio: float = 0.12
     margin_px: int = 0
+    write_report: bool = True
 
 
 @dataclass(frozen=True, slots=True)
 class BuildReport:
     output: str
-    inputs: dict[str, str]
+    inputs: dict[str, str | None]
     slide_count: int
     lecture_end_ms: int
     source_audio_duration_ms: int
@@ -50,27 +50,32 @@ class BuildReport:
 
 
 def _validate_paths(request: BuildRequest) -> None:
-    for label in ("source_media", "pptx", "timeline", "logo", "outro"):
+    for label in ("source_media", "pptx", "timeline"):
         path = Path(getattr(request, label))
         if not path.is_file():
+            raise WorkflowError(f"{label} file does not exist: {path}")
+    for label in ("logo", "outro"):
+        path = getattr(request, label)
+        if path is not None and not Path(path).is_file():
             raise WorkflowError(f"{label} file does not exist: {path}")
     if request.output.exists():
         raise WorkflowError(f"output already exists: {request.output}")
     report_path = Path(f"{request.output}.report.json")
-    if report_path.exists():
+    if request.write_report and report_path.exists():
         raise WorkflowError(f"report already exists: {report_path}")
     if request.fps <= 0:
         raise WorkflowError("fps must be positive")
-    if not 0 < request.logo_width_ratio <= 1:
-        raise WorkflowError("logo width ratio must be between 0 and 1")
-    if request.margin_px < 0:
-        raise WorkflowError("logo margin must not be negative")
+    if request.logo is not None:
+        if not 0 < request.logo_width_ratio <= 1:
+            raise WorkflowError("logo width ratio must be between 0 and 1")
+        if request.margin_px < 0:
+            raise WorkflowError("logo margin must not be negative")
 
 
 def _verify_final(info: MediaInfo, expected_duration_ms: int, fps: int) -> list[str]:
     if (info.width, info.height) != (1280, 720):
         raise WorkflowError(f"final video is {info.width}x{info.height}, expected 1280x720")
-    if info.fps != Fraction(fps, 1):
+    if info.fps is None or abs(float(info.fps) - fps) > 0.01:
         raise WorkflowError(f"final video is {info.fps} fps, expected {fps} fps")
     if not info.has_audio or info.video_codec != "h264" or info.audio_codec != "aac":
         raise WorkflowError("final video must contain H.264 video and AAC audio")
@@ -94,12 +99,13 @@ def build_video(
         source_media=Path(request.source_media),
         pptx=Path(request.pptx),
         timeline=Path(request.timeline),
-        logo=Path(request.logo),
-        outro=Path(request.outro),
+        logo=Path(request.logo) if request.logo is not None else None,
+        outro=Path(request.outro) if request.outro is not None else None,
         output=Path(request.output),
         fps=request.fps,
         logo_width_ratio=request.logo_width_ratio,
         margin_px=request.margin_px,
+        write_report=request.write_report,
     )
     def check_cancelled() -> None:
         if cancel_event is not None and cancel_event.is_set():
@@ -116,9 +122,12 @@ def build_video(
         source_info = probe_media(request.source_media)
         if not source_info.has_audio or source_info.audio_duration_ms is None:
             raise WorkflowError("source video does not contain an audio stream")
-        outro_info = probe_media(request.outro)
-        if outro_info.width is None or outro_info.height is None:
-            raise WorkflowError("outro does not contain a video stream")
+        outro_duration_ms = 0
+        if request.outro is not None:
+            outro_info = probe_media(request.outro)
+            if outro_info.width is None or outro_info.height is None:
+                raise WorkflowError("outro does not contain a video stream")
+            outro_duration_ms = outro_info.duration_ms
         slide_count = count_pptx_slides(request.pptx)
         timeline = parse_timeline(request.timeline)
         spans = validate_timeline(
@@ -128,7 +137,7 @@ def build_video(
             fps=request.fps,
         )
         lecture_end_ms = timeline.slides[-1].end_ms
-        expected_duration_ms = lecture_end_ms + outro_info.duration_ms
+        expected_duration_ms = lecture_end_ms + outro_duration_ms
         request.output.parent.mkdir(parents=True, exist_ok=True)
 
         with tempfile.TemporaryDirectory(prefix="slide-video-", dir=request.output.parent) as temporary:
@@ -144,8 +153,7 @@ def build_video(
             )
             check_cancelled()
             lecture = staging / "lecture.mp4"
-            normalized_outro = staging / "outro.mp4"
-            staged_final = staging / "final.mp4"
+            staged_final = lecture
             stage("rendering_lecture")
             render_lecture(
                 images,
@@ -159,16 +167,19 @@ def build_video(
                 cancel_event=cancel_event,
                 log_path=log_path,
             )
-            stage("preparing_outro")
-            normalize_outro(
-                request.outro, normalized_outro, fps=request.fps,
-                cancel_event=cancel_event, log_path=log_path,
-            )
-            stage("joining")
-            join_parts(
-                lecture, normalized_outro, staged_final,
-                cancel_event=cancel_event, log_path=log_path,
-            )
+            if request.outro is not None:
+                normalized_outro = staging / "outro.mp4"
+                staged_final = staging / "final.mp4"
+                stage("preparing_outro")
+                normalize_outro(
+                    request.outro, normalized_outro, fps=request.fps,
+                    cancel_event=cancel_event, log_path=log_path,
+                )
+                stage("joining")
+                join_parts(
+                    lecture, normalized_outro, staged_final,
+                    cancel_event=cancel_event, log_path=log_path,
+                )
             if not staged_final.is_file():
                 raise WorkflowError("composition did not create the staged final video")
             stage("verifying")
@@ -180,22 +191,31 @@ def build_video(
                     "source_media": str(request.source_media.resolve()),
                     "pptx": str(request.pptx.resolve()),
                     "timeline": str(request.timeline.resolve()),
-                    "logo": str(request.logo.resolve()),
-                    "outro": str(request.outro.resolve()),
+                    "logo": str(request.logo.resolve()) if request.logo is not None else None,
+                    "outro": str(request.outro.resolve()) if request.outro is not None else None,
                 },
                 slide_count=len(timeline.slides),
                 lecture_end_ms=lecture_end_ms,
                 source_audio_duration_ms=source_info.audio_duration_ms,
                 trimmed_source_tail_ms=max(0, source_info.audio_duration_ms - lecture_end_ms),
-                outro_duration_ms=outro_info.duration_ms,
+                outro_duration_ms=outro_duration_ms,
                 expected_duration_ms=expected_duration_ms,
                 actual_duration_ms=final_info.duration_ms,
                 checks=checks,
             )
-            staged_report = staging / "report.json"
-            staged_report.write_text(json.dumps(asdict(report), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            report_path = Path(f"{request.output}.report.json")
+            staged_report: Path | None = None
+            if request.write_report:
+                staged_report = staging / "report.json"
+                staged_report.write_text(
+                    json.dumps(asdict(report), ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+            else:
+                report_path.unlink(missing_ok=True)
             staged_final.replace(request.output)
-            staged_report.replace(Path(f"{request.output}.report.json"))
+            if staged_report is not None:
+                staged_report.replace(report_path)
             return report
     except (WorkflowCancelled, CompositionCancelled) as exc:
         raise WorkflowCancelled(str(exc)) from exc

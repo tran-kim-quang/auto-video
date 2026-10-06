@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from fractions import Fraction
 from pathlib import Path
+import sys
 import threading
+from types import ModuleType
 
 import pytest
 
@@ -104,12 +106,22 @@ class _RejectHiddenPowerPoint(_FakePowerPoint):
             raise RuntimeError("Hiding the application window is not allowed")
 
 
+@pytest.fixture
+def win32com_client(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+    package = ModuleType("win32com")
+    client = ModuleType("win32com.client")
+    package.client = client
+    monkeypatch.setitem(sys.modules, "win32com", package)
+    monkeypatch.setitem(sys.modules, "win32com.client", client)
+    return client
+
+
 def test_exports_unique_requested_slides_and_preserves_unicode_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, win32com_client: ModuleType
 ) -> None:
     calls: list[tuple] = []
     app = _FakePowerPoint(calls)
-    monkeypatch.setattr("win32com.client.DispatchEx", lambda _: app)
+    monkeypatch.setattr(win32com_client, "DispatchEx", lambda _: app, raising=False)
     pptx = tmp_path / "Bài giảng có dấu.pptx"
     pptx.write_bytes(b"pptx")
     target = tmp_path / "ảnh tạm"
@@ -125,11 +137,11 @@ def test_exports_unique_requested_slides_and_preserves_unicode_path(
 
 
 def test_exports_when_powerpoint_rejects_hiding_the_application(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, win32com_client: ModuleType
 ) -> None:
     calls: list[tuple] = []
     app = _RejectHiddenPowerPoint(calls)
-    monkeypatch.setattr("win32com.client.DispatchEx", lambda _: app)
+    monkeypatch.setattr(win32com_client, "DispatchEx", lambda _: app, raising=False)
     pptx = tmp_path / "slides.pptx"
     pptx.write_bytes(b"pptx")
 
@@ -140,11 +152,11 @@ def test_exports_when_powerpoint_rejects_hiding_the_application(
 
 
 def test_rejects_missing_slide_before_any_export_and_cleans_up(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, win32com_client: ModuleType
 ) -> None:
     calls: list[tuple] = []
     app = _FakePowerPoint(calls)
-    monkeypatch.setattr("win32com.client.DispatchEx", lambda _: app)
+    monkeypatch.setattr(win32com_client, "DispatchEx", lambda _: app, raising=False)
     pptx = tmp_path / "slides.pptx"
     pptx.write_bytes(b"pptx")
 
@@ -156,7 +168,7 @@ def test_rejects_missing_slide_before_any_export_and_cleans_up(
 
 
 def test_cancellation_between_slide_exports_cleans_up(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, win32com_client: ModuleType
 ) -> None:
     calls: list[tuple] = []
     event = threading.Event()
@@ -175,7 +187,7 @@ def test_cancellation_between_slide_exports_cleans_up(
         return slide
 
     app.presentation.Slides.Item = item
-    monkeypatch.setattr("win32com.client.DispatchEx", lambda _: app)
+    monkeypatch.setattr(win32com_client, "DispatchEx", lambda _: app, raising=False)
     pptx = tmp_path / "slides.pptx"
     pptx.write_bytes(b"pptx")
 

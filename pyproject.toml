@@ -6,17 +6,24 @@ build-backend = "setuptools.build_meta"
 name = "pyramid-slide-video-workflow"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["pywin32>=306; sys_platform == 'win32'"]
+dependencies = [
+    "pillow>=11",
+    "python-pptx>=1.0",
+    "pywin32>=306; sys_platform == 'win32'",
+]
 
 [project.optional-dependencies]
-dev = ["pillow>=11", "pytest>=9"]
+dev = ["pytest>=9"]
+build = ["pyinstaller>=6.16"]
 
 [project.scripts]
 build-video = "video_workflow.cli:main"
+build-video-batch = "video_workflow.batch_cli:main"
 video-workflow-ui = "video_workflow.ui:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["integration: requires real Linux media and slide tools"]
 
 [tool.setuptools.packages.find]
 include = ["video_workflow*"]

@@ -24,7 +24,9 @@ def _files(tmp_path: Path) -> dict[str, Path]:
     return values
 
 
-def _controller(tmp_path: Path, *, globals_ready: bool = True) -> tuple[QueueController, dict[str, Path]]:
+def _controller(
+    tmp_path: Path, *, globals_ready: bool = True
+) -> tuple[QueueController, dict[str, Path]]:
     files = _files(tmp_path)
     controller = QueueController(JsonStore(tmp_path / "data"))
     if globals_ready:
@@ -32,7 +34,9 @@ def _controller(tmp_path: Path, *, globals_ready: bool = True) -> tuple[QueueCon
     return controller, files
 
 
-def _enqueue(controller: QueueController, files: dict[str, Path], tmp_path: Path, name: str):
+def _enqueue(
+    controller: QueueController, files: dict[str, Path], tmp_path: Path, name: str
+):
     return controller.enqueue(
         source_media=files["source_media"],
         pptx=files["pptx"],
@@ -42,7 +46,9 @@ def _enqueue(controller: QueueController, files: dict[str, Path], tmp_path: Path
     )
 
 
-def test_recovers_running_jobs_and_claims_only_one_in_creation_order(tmp_path: Path) -> None:
+def test_recovers_running_jobs_and_claims_only_one_in_creation_order(
+    tmp_path: Path,
+) -> None:
     controller, files = _controller(tmp_path)
     first = _enqueue(controller, files, tmp_path, "one")
     second = _enqueue(controller, files, tmp_path, "two")
@@ -58,17 +64,54 @@ def test_recovers_running_jobs_and_claims_only_one_in_creation_order(tmp_path: P
     assert reloaded.claim_next().id == second.id
 
 
-def test_missing_globals_pause_then_resume_same_waiting_job(tmp_path: Path) -> None:
+def test_absent_global_assets_do_not_pause_waiting_job(tmp_path: Path) -> None:
     controller, files = _controller(tmp_path, globals_ready=False)
     job = _enqueue(controller, files, tmp_path, "lesson")
-    assert controller.claim_next() is None
-    assert controller.jobs()[0].status is JobStatus.WAITING
-
-    controller.set_global_assets(files["logo"], files["outro"])
     assert controller.claim_next().id == job.id
 
 
-def test_output_created_after_enqueue_fails_candidate_and_claims_next(tmp_path: Path) -> None:
+def test_global_assets_are_independently_optional_and_validate_supplied_paths(
+    tmp_path: Path,
+) -> None:
+    controller, files = _controller(tmp_path, globals_ready=False)
+
+    assert controller.set_global_assets(files["logo"], None).logo == files["logo"]
+    assert controller.set_global_assets(None, files["outro"]).outro == files["outro"]
+    settings = controller.set_global_assets(None, None)
+    assert settings.logo is None
+    assert settings.outro is None
+    with pytest.raises(ValueError, match="logo"):
+        controller.set_global_assets(tmp_path / "missing.png", None)
+
+
+def test_missing_global_outro_blocks_part_2_but_not_part_1(tmp_path: Path) -> None:
+    controller, files = _controller(tmp_path)
+    files["outro"].unlink()
+    controller.enqueue(
+        source_media=files["source_media"],
+        pptx=files["pptx"],
+        timeline=files["timeline"],
+        output_name="lesson_2",
+        output_directory=tmp_path / "out",
+        use_outro=True,
+    )
+    part1 = controller.enqueue(
+        source_media=files["source_media"],
+        pptx=files["pptx"],
+        timeline=files["timeline"],
+        output_name="another_lesson_1",
+        output_directory=tmp_path / "out",
+        use_outro=False,
+    )
+
+    assert controller.claim_next().id == part1.id
+    controller.mark_completed(part1.id)
+    assert controller.claim_next() is None
+
+
+def test_output_created_after_enqueue_fails_candidate_and_claims_next(
+    tmp_path: Path,
+) -> None:
     controller, files = _controller(tmp_path)
     first = _enqueue(controller, files, tmp_path, "one")
     second = _enqueue(controller, files, tmp_path, "two")
@@ -117,7 +160,7 @@ def test_completed_and_interrupted_transitions(tmp_path: Path) -> None:
 
 def test_moved_job_input_fails_without_blocking_next(tmp_path: Path) -> None:
     controller, files = _controller(tmp_path)
-    first = _enqueue(controller, files, tmp_path, "one")
+    _enqueue(controller, files, tmp_path, "one")
     second = _enqueue(controller, files, tmp_path, "two")
     files["source_media"].unlink()
     replacement = tmp_path / "replacement.mp3"
@@ -131,18 +174,70 @@ def test_moved_job_input_fails_without_blocking_next(tmp_path: Path) -> None:
     assert controller.jobs()[0].status is JobStatus.FAILED
 
 
-def test_enqueue_rejects_missing_input_existing_output_and_bad_directory(tmp_path: Path) -> None:
+def test_enqueue_rejects_missing_input_existing_output_and_bad_directory(
+    tmp_path: Path,
+) -> None:
     controller, files = _controller(tmp_path)
     with pytest.raises(ValueError, match="source_media"):
         controller.enqueue(
-            source_media=tmp_path / "missing.mp3", pptx=files["pptx"], timeline=files["timeline"],
-            output_name="x", output_directory=tmp_path / "out",
+            source_media=tmp_path / "missing.mp3",
+            pptx=files["pptx"],
+            timeline=files["timeline"],
+            output_name="x",
+            output_directory=tmp_path / "out",
         )
     (tmp_path / "out" / "exists.mp4").write_bytes(b"x")
     with pytest.raises(ValueError, match="already exists"):
         _enqueue(controller, files, tmp_path, "exists")
     with pytest.raises(ValueError, match="output directory"):
         controller.enqueue(
-            source_media=files["source_media"], pptx=files["pptx"], timeline=files["timeline"],
-            output_name="x", output_directory=tmp_path / "missing-dir",
+            source_media=files["source_media"],
+            pptx=files["pptx"],
+            timeline=files["timeline"],
+            output_name="x",
+            output_directory=tmp_path / "missing-dir",
+        )
+
+
+def test_merge_job_ignores_stale_slide_assets(tmp_path: Path) -> None:
+    controller, files = _controller(tmp_path)
+    files["logo"].unlink()
+    job = controller.enqueue_merge(
+        first_video=files["source_media"],
+        second_video=files["outro"],
+        output_name="merged",
+        output_directory=tmp_path / "out",
+    )
+
+    claimed = controller.claim_next()
+
+    assert claimed is not None
+    assert claimed.id == job.id
+    assert claimed.kind.value == "merge"
+
+
+def test_slide_and_merge_jobs_keep_fifo_order(tmp_path: Path) -> None:
+    controller, files = _controller(tmp_path)
+    slide = _enqueue(controller, files, tmp_path, "slide")
+    merged = controller.enqueue_merge(
+        first_video=files["source_media"],
+        second_video=files["outro"],
+        output_name="merged",
+        output_directory=tmp_path / "out",
+    )
+
+    assert controller.claim_next().id == slide.id
+    controller.mark_completed(slide.id)
+    assert controller.claim_next().id == merged.id
+
+
+def test_enqueue_merge_rejects_missing_second_video(tmp_path: Path) -> None:
+    controller, files = _controller(tmp_path)
+
+    with pytest.raises(ValueError, match="second_video"):
+        controller.enqueue_merge(
+            first_video=files["source_media"],
+            second_video=tmp_path / "missing.mp4",
+            output_name="merged",
+            output_directory=tmp_path / "out",
         )

@@ -16,8 +16,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--pptx", required=True, type=Path, help="PowerPoint slide deck")
     parser.add_argument("--timeline", required=True, type=Path, help="Slide timeline in TXT or JSON format")
-    parser.add_argument("--logo", required=True, type=Path, help="Logo image placed at lower right")
-    parser.add_argument("--outro", required=True, type=Path, help="Video appended after the final slide")
+    parser.add_argument("--logo", type=Path, help="Optional logo image placed at lower right")
+    parser.add_argument("--outro", type=Path, help="Optional video appended after the final slide")
     parser.add_argument("--output", required=True, type=Path, help="New MP4 output path")
     parser.add_argument("--fps", type=int, default=24, help="Output frame rate (default: 24)")
     parser.add_argument(

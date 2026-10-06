@@ -4,7 +4,7 @@ import threading
 from dataclasses import replace
 from pathlib import Path
 
-from .job_models import GlobalSettings, JobRecord, JobStage, JobStatus, utc_now
+from .job_models import GlobalSettings, JobKind, JobRecord, JobStage, JobStatus, utc_now
 from .json_store import JsonStore
 
 
@@ -33,11 +33,14 @@ class QueueController:
             self._settings = self.store.load_settings()
             self._jobs = self.store.load_jobs()
 
-    def set_global_assets(self, logo: Path, outro: Path) -> GlobalSettings:
-        logo, outro = Path(logo), Path(outro)
-        if not logo.is_file():
+    def set_global_assets(
+        self, logo: Path | None, outro: Path | None
+    ) -> GlobalSettings:
+        logo = Path(logo) if logo is not None else None
+        outro = Path(outro) if outro is not None else None
+        if logo is not None and not logo.is_file():
             raise ValueError(f"logo file does not exist: {logo}")
-        if not outro.is_file():
+        if outro is not None and not outro.is_file():
             raise ValueError(f"outro file does not exist: {outro}")
         with self._lock:
             self._settings = GlobalSettings(logo, outro)
@@ -45,9 +48,19 @@ class QueueController:
             return self._settings
 
     def _validate_job_paths(self, job: JobRecord) -> str | None:
-        for label in ("source_media", "pptx", "timeline"):
-            path = Path(getattr(job, label))
-            if not path.is_file():
+        if job.kind is JobKind.MERGE:
+            required = (
+                ("source_media", job.source_media),
+                ("second_video", job.secondary_media),
+            )
+        else:
+            required = (
+                ("source_media", job.source_media),
+                ("pptx", job.pptx),
+                ("timeline", job.timeline),
+            )
+        for label, path in required:
+            if path is None or not Path(path).is_file():
                 return f"{label} file does not exist: {path}"
         if not job.output_directory.is_dir():
             return f"output directory does not exist: {job.output_directory}"
@@ -63,11 +76,37 @@ class QueueController:
         timeline: Path,
         output_name: str,
         output_directory: Path,
+        write_report: bool = True,
+        use_outro: bool = True,
     ) -> JobRecord:
         job = JobRecord.new(
             source_media=source_media,
             pptx=pptx,
             timeline=timeline,
+            output_name=output_name,
+            output_directory=output_directory,
+            write_report=write_report,
+            use_outro=use_outro,
+        )
+        error = self._validate_job_paths(job)
+        if error:
+            raise ValueError(error)
+        with self._lock:
+            self._jobs.append(job)
+            self.store.save_jobs(self._jobs)
+        return job
+
+    def enqueue_merge(
+        self,
+        *,
+        first_video: Path,
+        second_video: Path,
+        output_name: str,
+        output_directory: Path,
+    ) -> JobRecord:
+        job = JobRecord.new_merge(
+            first_video=first_video,
+            second_video=second_video,
             output_name=output_name,
             output_directory=output_directory,
         )
@@ -79,26 +118,33 @@ class QueueController:
             self.store.save_jobs(self._jobs)
         return job
 
-    def _globals_ready(self) -> bool:
-        return bool(
-            self._settings.logo
-            and self._settings.outro
-            and self._settings.logo.is_file()
-            and self._settings.outro.is_file()
+    def _globals_ready(self, job: JobRecord) -> bool:
+        logo_ready = self._settings.logo is None or self._settings.logo.is_file()
+        outro_ready = (
+            not job.use_outro
+            or self._settings.outro is None
+            or self._settings.outro.is_file()
         )
+        return logo_ready and outro_ready
 
     def claim_next(self) -> JobRecord | None:
         with self._lock:
-            if any(job.status is JobStatus.RUNNING for job in self._jobs) or not self._globals_ready():
+            if any(job.status is JobStatus.RUNNING for job in self._jobs):
                 return None
             changed = False
             for index, job in enumerate(self._jobs):
                 if job.status is not JobStatus.WAITING:
                     continue
+                if job.kind is JobKind.SLIDE and not self._globals_ready(job):
+                    continue
                 error = self._validate_job_paths(job)
                 if error:
                     self._jobs[index] = replace(
-                        job, status=JobStatus.FAILED, error=error, stage=None, finished_at=utc_now()
+                        job,
+                        status=JobStatus.FAILED,
+                        error=error,
+                        stage=None,
+                        finished_at=utc_now(),
                     )
                     changed = True
                     continue
@@ -141,7 +187,9 @@ class QueueController:
             job = self._jobs[index]
             if job.status is not JobStatus.RUNNING:
                 raise QueueStateError(f"only a running job can become {status.value}")
-            updated = replace(job, status=status, stage=None, error=error, finished_at=utc_now())
+            updated = replace(
+                job, status=status, stage=None, error=error, finished_at=utc_now()
+            )
             self._jobs[index] = updated
             self.store.save_jobs(self._jobs)
             return updated
@@ -152,7 +200,9 @@ class QueueController:
     def mark_failed(self, job_id: str, error: str) -> JobRecord:
         return self._finish(job_id, JobStatus.FAILED, error)
 
-    def mark_interrupted(self, job_id: str, error: str = "application closed") -> JobRecord:
+    def mark_interrupted(
+        self, job_id: str, error: str = "application closed"
+    ) -> JobRecord:
         return self._finish(job_id, JobStatus.INTERRUPTED, error)
 
     def retry(self, job_id: str) -> JobRecord:
@@ -162,7 +212,12 @@ class QueueController:
             if job.status not in {JobStatus.FAILED, JobStatus.INTERRUPTED}:
                 raise QueueStateError("only failed or interrupted jobs can be retried")
             retried = replace(
-                job, status=JobStatus.WAITING, stage=None, error=None, started_at=None, finished_at=None,
+                job,
+                status=JobStatus.WAITING,
+                stage=None,
+                error=None,
+                started_at=None,
+                finished_at=None,
                 created_at=utc_now(),
             )
             error = self._validate_job_paths(retried)
@@ -180,6 +235,42 @@ class QueueController:
                 raise QueueStateError("only waiting jobs can be removed")
             self._jobs.pop(index)
             self.store.save_jobs(self._jobs)
+
+    def restore_available_path_jobs(self) -> tuple[JobRecord, ...]:
+        """Requeue jobs that failed only because a required path disappeared."""
+        with self._lock:
+            restored: list[JobRecord] = []
+            remaining: list[JobRecord] = []
+            for job in self._jobs:
+                path_error = bool(
+                    job.error
+                    and (
+                        " file does not exist:" in job.error
+                        or job.error.startswith("output directory does not exist:")
+                    )
+                )
+                if (
+                    job.status is JobStatus.FAILED
+                    and path_error
+                    and self._validate_job_paths(job) is None
+                ):
+                    restored.append(
+                        replace(
+                            job,
+                            status=JobStatus.WAITING,
+                            stage=None,
+                            error=None,
+                            started_at=None,
+                            finished_at=None,
+                            created_at=utc_now(),
+                        )
+                    )
+                else:
+                    remaining.append(job)
+            if restored:
+                self._jobs = remaining + restored
+                self.store.save_jobs(self._jobs)
+            return tuple(restored)
 
     def recover_startup(self) -> None:
         with self._lock:
