@@ -125,6 +125,8 @@ class QueueWorker:
                             first_video=job.source_media,
                             second_video=job.secondary_media,
                             output=job.output_path,
+                            write_report=job.write_report,
+                            overwrite_output=job.overwrite_output,
                         )
                         builder = self.merge_build
                     else:

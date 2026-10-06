@@ -426,6 +426,53 @@ def test_worker_dispatches_merge_job_and_persists_merge_stages(tmp_path: Path) -
     ]
 
 
+def test_worker_passes_batch_output_settings_to_merge_builder(tmp_path: Path) -> None:
+    controller = _controller(tmp_path, 0)
+    parts = []
+    for part in (1, 2):
+        job = controller.enqueue(
+            source_media=tmp_path / "source.mp3",
+            pptx=tmp_path / "slides.pptx",
+            timeline=tmp_path / "timeline.txt",
+            output_name=f"lesson_{part}",
+            output_directory=tmp_path / "output",
+            overwrite_output=True,
+        )
+        assert controller.claim_next().id == job.id
+        job.output_path.write_bytes(f"part-{part}".encode())
+        controller.mark_completed(job.id)
+        parts.append(job)
+    merged = controller.enqueue_merge(
+        first_video=parts[0].output_path,
+        second_video=parts[1].output_path,
+        output_name="lesson",
+        output_directory=tmp_path / "output",
+        write_report=False,
+        overwrite_output=True,
+        dependency_job_ids=(parts[0].id, parts[1].id),
+    )
+    requests = []
+    worker = QueueWorker(
+        controller,
+        build=lambda *_args, **_kwargs: None,
+        merge_build=lambda request, **_kwargs: requests.append(request),
+    )
+
+    worker.start()
+    try:
+        _wait_until(
+            lambda: next(job for job in controller.jobs() if job.id == merged.id).status
+            is JobStatus.COMPLETED
+        )
+    finally:
+        worker.stop(timeout=1)
+
+    assert requests[0].first_video.name == "lesson_1.mp4"
+    assert requests[0].second_video.name == "lesson_2.mp4"
+    assert requests[0].write_report is False
+    assert requests[0].overwrite_output is True
+
+
 @pytest.mark.integration
 def test_default_worker_runs_merge_pipeline_from_queue(tmp_path: Path) -> None:
     controller = _controller(tmp_path, 0)

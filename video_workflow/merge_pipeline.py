@@ -18,6 +18,8 @@ class MergeRequest:
     second_video: Path
     output: Path
     fps: int = 24
+    write_report: bool = True
+    overwrite_output: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,10 +38,10 @@ def _validate_paths(request: MergeRequest) -> None:
         path = Path(getattr(request, label))
         if not path.is_file():
             raise WorkflowError(f"{label} file does not exist: {path}")
-    if request.output.exists():
+    if request.output.exists() and not request.overwrite_output:
         raise WorkflowError(f"output already exists: {request.output}")
     report_path = Path(f"{request.output}.report.json")
-    if report_path.exists():
+    if request.write_report and report_path.exists():
         raise WorkflowError(f"report already exists: {report_path}")
     if request.fps <= 0:
         raise WorkflowError("fps must be positive")
@@ -57,6 +59,8 @@ def merge_videos(
         second_video=Path(request.second_video),
         output=Path(request.output),
         fps=request.fps,
+        write_report=request.write_report,
+        overwrite_output=request.overwrite_output,
     )
 
     def check_cancelled() -> None:
@@ -126,14 +130,24 @@ def merge_videos(
                 actual_duration_ms=final_info.duration_ms,
                 checks=checks,
             )
-            staged_report = staging / "report.json"
-            staged_report.write_text(
-                json.dumps(asdict(report), ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
+            report_path = Path(f"{request.output}.report.json")
+            staged_report: Path | None = None
+            if request.write_report:
+                staged_report = staging / "report.json"
+                staged_report.write_text(
+                    json.dumps(asdict(report), ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
             check_cancelled()
-            _publish_video(staged_final, request.output, overwrite=False)
-            staged_report.replace(Path(f"{request.output}.report.json"))
+            if not request.write_report:
+                report_path.unlink(missing_ok=True)
+            _publish_video(
+                staged_final,
+                request.output,
+                overwrite=request.overwrite_output,
+            )
+            if staged_report is not None:
+                staged_report.replace(report_path)
             return report
     except (WorkflowCancelled, CompositionCancelled) as exc:
         raise WorkflowCancelled(str(exc)) from exc
