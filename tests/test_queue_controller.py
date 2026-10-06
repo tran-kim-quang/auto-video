@@ -202,6 +202,9 @@ def test_dependent_merge_waits_through_part_failure_and_runs_after_retry(
     assert controller.claim_next().id == part1.id
     part1.output_path.write_bytes(b"part-1")
     controller.mark_completed(part1.id)
+    assert controller.claim_next().id == part2.id
+    part2.output_path.write_bytes(b"part-2-retry")
+    controller.mark_completed(part2.id)
 
     assert controller.claim_next().id == merged.id
 
@@ -259,6 +262,78 @@ def test_enqueue_merge_rejects_unknown_dependency_id(tmp_path: Path) -> None:
         )
 
 
+def test_enqueue_merge_rejects_unknown_dependency_after_waiting_one(
+    tmp_path: Path,
+) -> None:
+    controller, files = _controller(tmp_path)
+    waiting = _enqueue(controller, files, tmp_path, "waiting")
+
+    with pytest.raises(ValueError, match="missing dependency: missing-job"):
+        controller.enqueue_merge(
+            first_video=waiting.output_path,
+            second_video=tmp_path / "out" / "missing.mp4",
+            output_name="lesson",
+            output_directory=tmp_path / "out",
+            dependency_job_ids=(waiting.id, "missing-job"),
+        )
+
+
+def test_retrying_failed_part_requeues_its_whole_pair_after_later_scan(
+    tmp_path: Path,
+) -> None:
+    controller, files = _controller(tmp_path)
+    first_group = _enqueue_dependent_merge(controller, files, tmp_path)
+    second_group = _enqueue_dependent_merge(controller, files, tmp_path)
+    first_part1, first_part2, first_merge = first_group
+    second_part1, second_part2, second_merge = second_group
+
+    assert controller.claim_next().id == first_part1.id
+    first_part1.output_path.write_bytes(b"first-scan-part-1")
+    controller.mark_completed(first_part1.id)
+    assert controller.claim_next().id == first_part2.id
+    controller.mark_failed(first_part2.id, "render failed")
+
+    for part, content in (
+        (second_part1, b"second-scan-part-1"),
+        (second_part2, b"second-scan-part-2"),
+    ):
+        assert controller.claim_next().id == part.id
+        part.output_path.write_bytes(content)
+        controller.mark_completed(part.id)
+    assert controller.claim_next().id == second_merge.id
+    controller.mark_completed(second_merge.id)
+
+    controller.retry(first_part2.id)
+
+    assert [job.id for job in controller.jobs()][-3:] == [
+        first_part1.id,
+        first_part2.id,
+        first_merge.id,
+    ]
+    assert controller.claim_next().id == first_part1.id
+    first_part1.output_path.write_bytes(b"first-scan-part-1-retry")
+    controller.mark_completed(first_part1.id)
+    assert controller.claim_next().id == first_part2.id
+    first_part2.output_path.write_bytes(b"first-scan-part-2-retry")
+    controller.mark_completed(first_part2.id)
+    claimed_merge = controller.claim_next()
+
+    assert claimed_merge.id == first_merge.id
+    assert claimed_merge.source_media.read_bytes() == b"first-scan-part-1-retry"
+    assert claimed_merge.secondary_media.read_bytes() == b"first-scan-part-2-retry"
+
+
+def test_dependent_pair_waits_as_a_group_when_part_2_outro_is_missing(
+    tmp_path: Path,
+) -> None:
+    controller, files = _controller(tmp_path)
+    part1, _part2, _merge = _enqueue_dependent_merge(controller, files, tmp_path)
+    files["outro"].unlink()
+
+    assert controller.claim_next() is None
+    assert next(job for job in controller.jobs() if job.id == part1.id).status is JobStatus.WAITING
+
+
 def test_remove_rejects_part_referenced_by_waiting_merge(tmp_path: Path) -> None:
     controller, files = _controller(tmp_path)
     part1, _part2, merged = _enqueue_dependent_merge(controller, files, tmp_path)
@@ -285,12 +360,12 @@ def test_recovery_keeps_merge_waiting_until_interrupted_part_is_retried(
         JobStatus.WAITING,
     ]
     reloaded.retry(part1.id)
-    assert reloaded.claim_next().id == part2.id
-    part2.output_path.write_bytes(b"part-2")
-    reloaded.mark_completed(part2.id)
     assert reloaded.claim_next().id == part1.id
     part1.output_path.write_bytes(b"part-1")
     reloaded.mark_completed(part1.id)
+    assert reloaded.claim_next().id == part2.id
+    part2.output_path.write_bytes(b"part-2")
+    reloaded.mark_completed(part2.id)
 
     assert reloaded.claim_next().id == merged.id
 

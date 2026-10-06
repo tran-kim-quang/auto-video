@@ -88,7 +88,7 @@ def _group_parts(
     display_stems: dict[tuple[str, str], str] = {}
     for job in jobs:
         leaf = job.pptx.parent
-        key = (str(leaf.absolute()).casefold(), job.lesson_stem.casefold())
+        key = (os.path.normcase(str(leaf.absolute())), job.lesson_stem.casefold())
         grouped.setdefault(key, {})[job.part] = job
         leaves[key] = leaf
         if key not in display_stems or job.part == 1:

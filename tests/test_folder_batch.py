@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+
+import pytest
 
 from video_workflow.folder_batch import discover_folder_jobs, queue_folder_jobs
 from video_workflow.json_store import JsonStore
@@ -232,3 +235,24 @@ def test_single_valid_part_is_queued_and_reports_missing_counterpart(
     assert [(issue.folder, issue.message) for issue in result.issues] == [
         (leaf, "ONLY: missing part 1")
     ]
+
+
+@pytest.mark.skipif(
+    os.path.normcase("A") == os.path.normcase("a"),
+    reason="case-distinct leaf folders are a POSIX filesystem scenario",
+)
+def test_case_distinct_linux_leaf_folders_do_not_cross_pair(tmp_path: Path) -> None:
+    upper_leaf = tmp_path / "A"
+    lower_leaf = tmp_path / "a"
+    for leaf, stem in ((upper_leaf, "LESSON_1"), (lower_leaf, "LESSON_2")):
+        _file(leaf / f"{stem}.pptx")
+        _file(leaf / f"{stem}.mp4")
+        _file(leaf / f"{stem}.txt")
+
+    result = discover_folder_jobs(tmp_path)
+
+    assert {job.pptx.parent for job in result.jobs} == {upper_leaf, lower_leaf}
+    assert {(issue.folder, issue.message) for issue in result.issues} == {
+        (upper_leaf, "LESSON: missing part 2"),
+        (lower_leaf, "LESSON: missing part 1"),
+    }

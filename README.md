@@ -113,7 +113,10 @@ cũ vẫn được giữ nguyên. Cả ba MP4 được giữ lại. Batch này k
 khác được giữ nguyên. Bộ file thiếu hoặc trùng media/timeline được báo theo từng
 folder, còn các bộ hợp lệ khác vẫn được thêm vào queue tuần tự. Logo toàn cục
 được áp dụng cho cả hai part; outro toàn cục chỉ được nối vào video part 2 và
-không được chèn thêm khi merge.
+không được chèn thêm khi merge. Nếu retry một part hoặc hệ thống tự khôi phục
+part sau khi đường dẫn xuất hiện lại, cả cặp part của lượt scan đó được render
+lại theo thứ tự trước khi merge; nhờ vậy một lượt scan cũ không lấy nhầm part
+đã bị lượt scan mới hơn ghi đè cùng tên.
 
 Tab **Merge 2 videos** tạo job ghép theo thứ tự **Video 1 → Video 2**. Hai video được chuẩn hóa độc lập về 1280×720, 24 fps, H.264/AAC trước khi ghép; video dọc được giữ trọn khung với viền đen và video không có audio được thêm silence. Logo và outro toàn cục không áp dụng cho loại job này.
 
