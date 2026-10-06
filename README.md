@@ -14,13 +14,17 @@ Phần `Outro/blank` ở cuối timeline nguồn luôn bị loại bỏ. Nếu k
 
 ### Windows
 
-Yêu cầu Windows 10/11, Python 3.12 trở lên và Microsoft PowerPoint. Chạy một lần:
+Yêu cầu Windows 10/11, Python 3.12 trở lên, `winget` và Microsoft PowerPoint
+desktop đã kích hoạt. Chạy một lần:
 
 ```bat
 setup.bat
 ```
 
-Script tạo `.venv`, cài package Python, kiểm tra Tkinter/PowerPoint và tự cài FFmpeg bằng `winget` nếu máy chưa có. Sau đó mở ứng dụng:
+Script kiểm tra Tkinter trước khi tạo `.venv`. Nếu Python đang thiếu Tkinter,
+script dùng `winget` để repair/cài Python 3.12 với thành phần Tcl/Tk, rồi tự
+cài các package Python, `pywin32`, FFmpeg/ffprobe và kiểm tra PowerPoint COM.
+Sau đó mở ứng dụng:
 
 ```bat
 run-ui.bat
@@ -113,7 +117,8 @@ Queue và lịch sử nằm trong `.workflow_data/jobs.json`. Job đang chạy k
 
 ## Yêu cầu
 
-- Windows 10/11: Microsoft PowerPoint, Python 3.12+; setup cài `pywin32` và FFmpeg.
+- Windows 10/11: Microsoft PowerPoint desktop đã kích hoạt, Python 3.12+ và
+  `winget`; setup tự cài/repair Tkinter, `pywin32`, FFmpeg và các package Python.
 - Ubuntu Desktop 24.04/26.04 LTS: Python 3.12+, Tkinter, FFmpeg, LibreOffice và Poppler.
 - GUI cần desktop session có display; Ubuntu Server headless chỉ phù hợp để chạy CLI.
 

@@ -16,15 +16,25 @@ function Report-Check([string]$Name, [bool]$Passed, [string]$Detail) {
     }
 }
 
-function Find-Python {
-    if (Test-Path -LiteralPath $VenvPython) {
-        return $VenvPython
-    }
+function Find-PythonLauncher {
     $py = Get-Command py -ErrorAction SilentlyContinue
+    if ($null -ne $py) { return $py.Source }
+    $candidates = @(
+        (Join-Path $env:LOCALAPPDATA "Programs\Python\Launcher\py.exe"),
+        (Join-Path $env:WINDIR "py.exe")
+    )
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate) { return $candidate }
+    }
+    return $null
+}
+
+function Find-SystemPython {
+    $py = Find-PythonLauncher
     if ($null -ne $py) {
         try {
-            & $py.Source -3.12 -c "import sys; raise SystemExit(0 if sys.version_info >= (3,12) else 1)"
-            if ($LASTEXITCODE -eq 0) { return "$($py.Source)|-3.12" }
+            & $py -3.12 -c "import sys; raise SystemExit(0 if sys.version_info >= (3,12) else 1)"
+            if ($LASTEXITCODE -eq 0) { return "$py|-3.12" }
         } catch {}
     }
     $python = Get-Command python -ErrorAction SilentlyContinue
@@ -43,7 +53,11 @@ function Invoke-Python([string]$PythonSpec, [string[]]$Arguments) {
 }
 
 Set-Location -LiteralPath $RepoRoot
-$PythonSpec = Find-Python
+if ($CheckOnly -and (Test-Path -LiteralPath $VenvPython)) {
+    $PythonSpec = $VenvPython
+} else {
+    $PythonSpec = Find-SystemPython
+}
 if ($null -eq $PythonSpec) {
     Report-Check "Python" $false "Python 3.12 or newer was not found."
     exit 1
@@ -52,10 +66,38 @@ $versionExit = Invoke-Python $PythonSpec @("-c", "import sys; print(sys.version.
 Report-Check "Python" ($versionExit -eq 0) "Python 3.12+"
 if ($versionExit -ne 0) { exit 1 }
 
+$tkExit = Invoke-Python $PythonSpec @("-c", "import tkinter; print(tkinter.TkVersion)")
+if (($tkExit -ne 0) -and (-not $CheckOnly)) {
+    Write-Host "Tkinter is missing. Repairing Python 3.12 with Tcl/Tk..."
+    $repairScript = Join-Path $RepoRoot "scripts\repair_windows_tkinter.py"
+    $repairExit = Invoke-Python $PythonSpec @($repairScript)
+    if ($repairExit -ne 0) {
+        Report-Check "Tkinter install" $false "Automatic Tcl/Tk installation failed."
+        exit 1
+    }
+    $env:Path = [Environment]::GetEnvironmentVariable("Path", "User") + ";" + [Environment]::GetEnvironmentVariable("Path", "Machine")
+    $py = Find-PythonLauncher
+    if ($null -eq $py) {
+        Report-Check "Tkinter install" $false "Python launcher was not found after repair."
+        exit 1
+    }
+    $PythonSpec = "$py|-3.12"
+    $tkExit = Invoke-Python $PythonSpec @("-c", "import tkinter; print(tkinter.TkVersion)")
+}
+if ($tkExit -ne 0) {
+    Report-Check "Tkinter" $false "Tkinter could not be imported or installed."
+    exit 1
+}
+
 if (-not $CheckOnly) {
-    if (-not (Test-Path -LiteralPath $VenvPython)) {
+    $createVenv = -not (Test-Path -LiteralPath $VenvPython)
+    if (-not $createVenv) {
+        & $VenvPython -c "import tkinter"
+        $createVenv = $LASTEXITCODE -ne 0
+    }
+    if ($createVenv) {
         Write-Host "Creating .venv..."
-        $venvExit = Invoke-Python $PythonSpec @("-m", "venv", (Join-Path $RepoRoot ".venv"))
+        $venvExit = Invoke-Python $PythonSpec @("-m", "venv", "--clear", (Join-Path $RepoRoot ".venv"))
         if ($venvExit -ne 0) { throw "Failed to create .venv" }
     }
     & $VenvPython -m pip install --upgrade pip
