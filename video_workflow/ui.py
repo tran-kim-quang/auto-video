@@ -242,7 +242,7 @@ class WorkflowApp:
             batch_form,
             text=(
                 "Recursively scans leaf folders for BASE.pptx, BASE_1/2 media, "
-                "and timeline_slide_BASE_1/2.txt/json."
+                "and timeline_slide_BASE_1/2.txt/json. Outro is added to part 2 only."
             ),
         ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(5, 0))
         self.batch_button = ttk.Button(
@@ -546,7 +546,9 @@ class WorkflowApp:
             required.extend((("PPTX", job.pptx), ("timeline", job.timeline)))
             if job.status in {JobStatus.WAITING, JobStatus.RUNNING}:
                 settings = self.controller.settings
-                required.extend((("logo", settings.logo), ("outro", settings.outro)))
+                required.append(("logo", settings.logo))
+                if job.use_outro:
+                    required.append(("outro", settings.outro))
         missing = [
             label
             for label, path in required

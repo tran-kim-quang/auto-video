@@ -97,7 +97,8 @@ Thư mục `output` không bị quét lại. Output đã tồn tại hoặc đã
 được bỏ qua và không bị ghi đè. Batch này không tạo file `*.report.json`; nếu
 gặp report cũ đi kèm một output đã hoàn thành, ứng dụng xóa report đó. Bộ file
 thiếu hoặc trùng media/timeline được báo theo từng folder, còn các bộ hợp lệ
-khác vẫn được thêm vào queue tuần tự.
+khác vẫn được thêm vào queue tuần tự. Logo toàn cục được áp dụng cho cả hai
+part; outro toàn cục chỉ được nối vào video part 2.
 
 Tab **Merge 2 videos** tạo job ghép theo thứ tự **Video 1 → Video 2**. Hai video được chuẩn hóa độc lập về 1280×720, 24 fps, H.264/AAC trước khi ghép; video dọc được giữ trọn khung với viền đen và video không có audio được thêm silence. Logo và outro toàn cục không áp dụng cho loại job này.
 

@@ -141,7 +141,7 @@ class QueueWorker:
                             pptx=job.pptx,
                             timeline=job.timeline,
                             logo=settings.logo,
-                            outro=settings.outro,
+                            outro=settings.outro if job.use_outro else None,
                             output=job.output_path,
                             write_report=job.write_report,
                         )

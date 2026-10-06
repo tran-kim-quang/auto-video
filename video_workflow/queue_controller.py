@@ -77,6 +77,7 @@ class QueueController:
         output_name: str,
         output_directory: Path,
         write_report: bool = True,
+        use_outro: bool = True,
     ) -> JobRecord:
         job = JobRecord.new(
             source_media=source_media,
@@ -85,6 +86,7 @@ class QueueController:
             output_name=output_name,
             output_directory=output_directory,
             write_report=write_report,
+            use_outro=use_outro,
         )
         error = self._validate_job_paths(job)
         if error:
@@ -116,10 +118,14 @@ class QueueController:
             self.store.save_jobs(self._jobs)
         return job
 
-    def _globals_ready(self) -> bool:
-        return (self._settings.logo is None or self._settings.logo.is_file()) and (
-            self._settings.outro is None or self._settings.outro.is_file()
+    def _globals_ready(self, job: JobRecord) -> bool:
+        logo_ready = self._settings.logo is None or self._settings.logo.is_file()
+        outro_ready = (
+            not job.use_outro
+            or self._settings.outro is None
+            or self._settings.outro.is_file()
         )
+        return logo_ready and outro_ready
 
     def claim_next(self) -> JobRecord | None:
         with self._lock:
@@ -129,8 +135,8 @@ class QueueController:
             for index, job in enumerate(self._jobs):
                 if job.status is not JobStatus.WAITING:
                     continue
-                if job.kind is JobKind.SLIDE and not self._globals_ready():
-                    return None
+                if job.kind is JobKind.SLIDE and not self._globals_ready(job):
+                    continue
                 error = self._validate_job_paths(job)
                 if error:
                     self._jobs[index] = replace(

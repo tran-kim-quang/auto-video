@@ -203,6 +203,34 @@ def test_worker_passes_batch_report_setting_to_slide_builder(tmp_path: Path) -> 
     assert requests[0].write_report is False
 
 
+def test_worker_uses_global_outro_for_part_2_only(tmp_path: Path) -> None:
+    controller = _controller(tmp_path, 0)
+    for part, use_outro in ((1, False), (2, True)):
+        controller.enqueue(
+            source_media=tmp_path / "source.mp3",
+            pptx=tmp_path / "slides.pptx",
+            timeline=tmp_path / "timeline.txt",
+            output_name=f"lesson_{part}",
+            output_directory=tmp_path / "output",
+            use_outro=use_outro,
+        )
+    requests = []
+    worker = QueueWorker(
+        controller, build=lambda request, **_kwargs: requests.append(request)
+    )
+
+    worker.start()
+    try:
+        _wait_until(
+            lambda: all(job.status is JobStatus.COMPLETED for job in controller.jobs()),
+            timeout=0.3,
+        )
+    finally:
+        worker.stop(timeout=1)
+
+    assert [request.outro for request in requests] == [None, tmp_path / "outro.mp4"]
+
+
 def test_stop_cancels_build_marks_interrupted_and_balances_com(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

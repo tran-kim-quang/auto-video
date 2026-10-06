@@ -120,3 +120,21 @@ def test_queues_new_outputs_skips_existing_or_queued_and_deletes_stale_report(
         leaf / "output" / "TOAN8_B1_T1_2.mp4",
     )
     assert len(controller.jobs()) == 1
+
+
+def test_batch_marks_outro_for_part_2_only(tmp_path: Path) -> None:
+    root = tmp_path / "Toan8"
+    leaf = root / "Bài 1"
+    for name in (
+        "TOAN8_B1_T1.pptx",
+        "TOAN8_B1_T1_1.mp4",
+        "timeline_slide_TOAN8_B1_T1_1.txt",
+        "TOAN8_B1_T1_2.mp4",
+        "timeline_slide_TOAN8_B1_T1_2.txt",
+    ):
+        _file(leaf / name)
+    controller = QueueController(JsonStore(tmp_path / "data"))
+
+    result = queue_folder_jobs(controller, root)
+
+    assert [job.use_outro for job in result.queued] == [False, True]

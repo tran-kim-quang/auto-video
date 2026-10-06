@@ -93,6 +93,7 @@ class JobRecord:
     kind: JobKind = JobKind.SLIDE
     secondary_media: Path | None = None
     write_report: bool = True
+    use_outro: bool = True
     status: JobStatus = JobStatus.WAITING
     stage: JobStage | None = None
     error: str | None = None
@@ -109,6 +110,7 @@ class JobRecord:
         output_name: str,
         output_directory: Path,
         write_report: bool = True,
+        use_outro: bool = True,
         status: JobStatus = JobStatus.WAITING,
     ) -> JobRecord:
         return cls(
@@ -120,6 +122,7 @@ class JobRecord:
             output_name=validate_output_name(output_name),
             output_directory=Path(output_directory),
             write_report=write_report,
+            use_outro=use_outro,
             status=status,
         )
 
@@ -164,6 +167,7 @@ class JobRecord:
             "output_name": self.output_name,
             "output_directory": str(self.output_directory),
             "write_report": self.write_report,
+            "use_outro": self.use_outro,
             "status": self.status.value,
             "stage": self.stage.value if self.stage else None,
             "error": self.error,
@@ -173,19 +177,29 @@ class JobRecord:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> JobRecord:
+        output_name = validate_output_name(str(data["output_name"]))
+        if "use_outro" in data:
+            use_outro = bool(data["use_outro"])
+        else:
+            is_existing_batch_part1 = (
+                data.get("write_report") is False
+                and Path(output_name).stem.casefold().endswith("_1")
+            )
+            use_outro = not is_existing_batch_part1
         return cls(
             id=str(data["id"]),
             created_at=str(data["created_at"]),
             source_media=Path(data["source_media"]),
             pptx=Path(data["pptx"]) if data.get("pptx") else None,
             timeline=Path(data["timeline"]) if data.get("timeline") else None,
-            output_name=validate_output_name(str(data["output_name"])),
+            output_name=output_name,
             output_directory=Path(data["output_directory"]),
             kind=JobKind(data.get("kind", JobKind.SLIDE)),
             secondary_media=(
                 Path(data["secondary_media"]) if data.get("secondary_media") else None
             ),
             write_report=bool(data.get("write_report", True)),
+            use_outro=use_outro,
             status=JobStatus(data["status"]),
             stage=JobStage(data["stage"]) if data.get("stage") else None,
             error=data.get("error"),

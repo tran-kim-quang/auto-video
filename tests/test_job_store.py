@@ -166,10 +166,30 @@ def test_slide_job_round_trips_disabled_report_and_legacy_defaults_to_enabled(
         output_name="lesson_1",
         output_directory=tmp_path / "output",
         write_report=False,
+        use_outro=False,
     )
 
     payload = job.to_dict()
     assert JobRecord.from_dict(payload).write_report is False
+    assert JobRecord.from_dict(payload).use_outro is False
 
     payload.pop("write_report")
+    payload.pop("use_outro")
     assert JobRecord.from_dict(payload).write_report is True
+    assert JobRecord.from_dict(payload).use_outro is True
+
+
+def test_existing_batch_jobs_infer_outro_from_part_suffix(tmp_path: Path) -> None:
+    part1 = JobRecord.new(
+        source_media=tmp_path / "source_1.mp4",
+        pptx=tmp_path / "slides.pptx",
+        timeline=tmp_path / "timeline_1.txt",
+        output_name="TOAN8_B1_T1_1",
+        output_directory=tmp_path / "output",
+        write_report=False,
+    ).to_dict()
+    part1.pop("use_outro")
+    part2 = dict(part1, output_name="TOAN8_B1_T1_2.mp4")
+
+    assert JobRecord.from_dict(part1).use_outro is False
+    assert JobRecord.from_dict(part2).use_outro is True

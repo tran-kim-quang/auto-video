@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from video_workflow.job_models import GlobalSettings
+from video_workflow.job_models import GlobalSettings, JobRecord
 from video_workflow.json_store import JsonStore
 from video_workflow.queue_controller import QueueController
 from video_workflow import ui as ui_module
@@ -261,3 +261,22 @@ def test_submit_batch_folder_queues_pdf_style_jobs_without_reports(
     assert jobs[0].write_report is False
     assert app.worker.wakes == 1
     assert app.status_var.get() == "Batch: 1 added, 0 skipped, 0 issue(s)"
+
+
+def test_part_1_file_status_does_not_require_global_outro(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    for name in ("source.mp4", "slides.pptx", "timeline.txt", "logo.png"):
+        (tmp_path / name).write_bytes(b"input")
+    app.controller.settings = GlobalSettings(
+        logo=tmp_path / "logo.png", outro=tmp_path / "missing-outro.mp4"
+    )
+    job = JobRecord.new(
+        source_media=tmp_path / "source.mp4",
+        pptx=tmp_path / "slides.pptx",
+        timeline=tmp_path / "timeline.txt",
+        output_name="lesson_1",
+        output_directory=tmp_path,
+        use_outro=False,
+    )
+
+    assert "outro" not in app._missing_job_paths(job)

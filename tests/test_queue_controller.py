@@ -84,6 +84,31 @@ def test_global_assets_are_independently_optional_and_validate_supplied_paths(
         controller.set_global_assets(tmp_path / "missing.png", None)
 
 
+def test_missing_global_outro_blocks_part_2_but_not_part_1(tmp_path: Path) -> None:
+    controller, files = _controller(tmp_path)
+    files["outro"].unlink()
+    controller.enqueue(
+        source_media=files["source_media"],
+        pptx=files["pptx"],
+        timeline=files["timeline"],
+        output_name="lesson_2",
+        output_directory=tmp_path / "out",
+        use_outro=True,
+    )
+    part1 = controller.enqueue(
+        source_media=files["source_media"],
+        pptx=files["pptx"],
+        timeline=files["timeline"],
+        output_name="another_lesson_1",
+        output_directory=tmp_path / "out",
+        use_outro=False,
+    )
+
+    assert controller.claim_next().id == part1.id
+    controller.mark_completed(part1.id)
+    assert controller.claim_next() is None
+
+
 def test_output_created_after_enqueue_fails_candidate_and_claims_next(
     tmp_path: Path,
 ) -> None:

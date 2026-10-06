@@ -19,6 +19,7 @@ class FolderJob:
     pptx: Path
     timeline: Path
     output: Path
+    part: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +120,7 @@ def discover_folder_jobs(root: Path) -> FolderScanResult:
                         pptx=deck,
                         timeline=timelines[0],
                         output=leaf / "output" / f"{output_stem}.mp4",
+                        part=part,
                     )
                 )
             if not found_part_input:
@@ -177,6 +179,7 @@ def queue_folder_jobs(
                 output_name=output.name,
                 output_directory=output.parent,
                 write_report=False,
+                use_outro=candidate.part == 2,
             )
         except (OSError, ValueError) as exc:
             issues.append(FolderIssue(candidate.pptx.parent, str(exc)))
