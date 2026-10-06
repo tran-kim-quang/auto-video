@@ -33,8 +33,8 @@ function Find-SystemPython {
     $py = Find-PythonLauncher
     if ($null -ne $py) {
         try {
-            & $py -3.12 -c "import sys; raise SystemExit(0 if sys.version_info >= (3,12) else 1)"
-            if ($LASTEXITCODE -eq 0) { return "$py|-3.12" }
+            & $py -3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3,12) else 1)"
+            if ($LASTEXITCODE -eq 0) { return "$py|-3" }
         } catch {}
     }
     $python = Get-Command python -ErrorAction SilentlyContinue
@@ -43,9 +43,9 @@ function Find-SystemPython {
 }
 
 function Invoke-Python([string]$PythonSpec, [string[]]$Arguments) {
-    if ($PythonSpec -like "*|-3.12") {
+    if ($PythonSpec -like "*|*") {
         $parts = $PythonSpec.Split('|', 2)
-        & $parts[0] -3.12 @Arguments | Out-Host
+        & $parts[0] $parts[1] @Arguments | Out-Host
     } else {
         & $PythonSpec @Arguments | Out-Host
     }
@@ -92,7 +92,7 @@ if ($tkExit -ne 0) {
 if (-not $CheckOnly) {
     $createVenv = -not (Test-Path -LiteralPath $VenvPython)
     if (-not $createVenv) {
-        & $VenvPython -c "import tkinter"
+        & $VenvPython -c "import sys, tkinter; raise SystemExit(0 if sys.version_info >= (3,12) else 1)"
         $createVenv = $LASTEXITCODE -ne 0
     }
     if ($createVenv) {

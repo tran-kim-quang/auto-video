@@ -1,99 +1,73 @@
 from __future__ import annotations
 
-import os
 import subprocess
-import sys
 from pathlib import Path
 
-
-ROOT = Path(__file__).parents[1]
-REPAIR_SCRIPT = ROOT / "scripts" / "repair_windows_tkinter.py"
-
-
-def _executable(path: Path, content: str) -> Path:
-    path.write_text(content, encoding="utf-8")
-    path.chmod(0o755)
-    return path
+from scripts import repair_windows_tkinter
 
 
 def test_tkinter_repair_installs_tcltk_and_verifies_python_launcher(
-    tmp_path: Path,
+    monkeypatch,
 ) -> None:
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    winget_log = tmp_path / "winget.log"
-    py_log = tmp_path / "py.log"
-    _executable(
-        fake_bin / "winget",
-        f"#!/bin/sh\nprintf '%s\\n' \"$@\" > '{winget_log}'\nexit 0\n",
-    )
-    _executable(
-        fake_bin / "py",
-        f"#!/bin/sh\nprintf '%s\\n' \"$@\" > '{py_log}'\nexit 0\n",
-    )
-    env = os.environ | {"PATH": f"{fake_bin}:{os.environ['PATH']}"}
+    calls: list[list[str]] = []
 
-    result = subprocess.run(
-        [sys.executable, str(REPAIR_SCRIPT)],
-        env=env,
-        capture_output=True,
-        text=True,
-    )
+    def fake_which(name: str) -> str | None:
+        return {"winget": "C:/Windows/winget.exe", "py": "C:/Windows/py.exe"}.get(
+            name
+        )
 
-    assert result.returncode == 0, result.stderr
-    winget_arguments = winget_log.read_text(encoding="utf-8").splitlines()
-    assert winget_arguments[:4] == [
+    def fake_run(command: list[str], *, check: bool):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(repair_windows_tkinter.shutil, "which", fake_which)
+    monkeypatch.setattr(repair_windows_tkinter.subprocess, "run", fake_run)
+
+    assert repair_windows_tkinter.main() == 0
+    assert calls[0][:5] == [
+        "C:/Windows/winget.exe",
         "install",
         "--id",
         "Python.Python.3.12",
         "--exact",
     ]
-    assert "--force" in winget_arguments
-    assert any("Include_tcltk=1" in argument for argument in winget_arguments)
-    assert py_log.read_text(encoding="utf-8").splitlines() == [
+    assert "--force" in calls[0]
+    assert any("Include_tcltk=1" in argument for argument in calls[0])
+    assert calls[1] == [
+        "C:/Windows/py.exe",
         "-3.12",
         "-c",
         "import tkinter; print(tkinter.TkVersion)",
     ]
 
 
-def test_tkinter_repair_reports_missing_winget(tmp_path: Path) -> None:
-    result = subprocess.run(
-        [sys.executable, str(REPAIR_SCRIPT)],
-        env=os.environ | {"PATH": str(tmp_path)},
-        capture_output=True,
-        text=True,
-    )
+def test_tkinter_repair_reports_missing_winget(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(repair_windows_tkinter.shutil, "which", lambda _name: None)
 
-    assert result.returncode == 1
-    assert "winget" in result.stderr
+    assert repair_windows_tkinter.main() == 1
+    assert "winget" in capsys.readouterr().err
 
 
 def test_tkinter_repair_finds_launcher_installed_outside_current_path(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
     local_app_data = tmp_path / "LocalAppData"
     launcher = local_app_data / "Programs" / "Python" / "Launcher" / "py.exe"
-    _executable(
-        fake_bin / "winget",
-        "#!/bin/sh\n"
-        f"mkdir -p '{launcher.parent}'\n"
-        f"printf '#!/bin/sh\\nexit 0\\n' > '{launcher}'\n"
-        f"chmod +x '{launcher}'\n"
-        "exit 0\n",
-    )
-    env = os.environ | {
-        "PATH": f"{fake_bin}:{os.environ['PATH']}",
-        "LOCALAPPDATA": str(local_app_data),
-    }
+    launcher.parent.mkdir(parents=True)
+    launcher.write_bytes(b"launcher")
+    calls: list[list[str]] = []
 
-    result = subprocess.run(
-        [sys.executable, str(REPAIR_SCRIPT)],
-        env=env,
-        capture_output=True,
-        text=True,
-    )
+    def fake_which(name: str) -> str | None:
+        return "C:/Windows/winget.exe" if name == "winget" else None
 
-    assert result.returncode == 0, result.stderr
+    def fake_run(command: list[str], *, check: bool):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    monkeypatch.delenv("WINDIR", raising=False)
+    monkeypatch.setattr(repair_windows_tkinter.shutil, "which", fake_which)
+    monkeypatch.setattr(repair_windows_tkinter.subprocess, "run", fake_run)
+
+    assert repair_windows_tkinter.main() == 0
+    assert calls[-1][0] == str(launcher)
