@@ -280,3 +280,15 @@ def test_part_1_file_status_does_not_require_global_outro(tmp_path: Path) -> Non
     )
 
     assert "outro" not in app._missing_job_paths(job)
+
+
+def test_batch_tab_guide_contains_folder_and_file_naming_example() -> None:
+    guide = ui_module.BATCH_FOLDER_GUIDE
+
+    assert "Folder lá: tên tùy ý" in guide
+    assert "Bài 1_Đơn thức/" in guide
+    assert "TOAN8_B1_T1.pptx" in guide
+    assert "TOAN8_B1_T1_1.mp4" in guide
+    assert "timeline_slide_TOAN8_B1_T1_2.json" in guide
+    assert "output/TOAN8_B1_T1_2.mp4" in guide
+    assert "Outro: chỉ part 2" in guide

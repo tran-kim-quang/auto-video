@@ -17,6 +17,19 @@ from .queue_controller import QueueController, QueueStateError
 from .worker import QueueWorker
 
 
+BATCH_FOLDER_GUIDE = """Quy ước đặt tên (ứng dụng quét đệ quy và chỉ xử lý folder lá):
+• Folder lá: tên tùy ý, ví dụ:
+  Bài 1_Đơn thức/
+    TOAN8_B1_T1.pptx
+    TOAN8_B1_T1_1.mp4
+    timeline_slide_TOAN8_B1_T1_1.txt
+    TOAN8_B1_T1_2.mp4
+    timeline_slide_TOAN8_B1_T1_2.json
+• BASE phải giống hệt tên PPTX; part chỉ là _1 hoặc _2.
+• Output tự tạo: output/TOAN8_B1_T1_1.mp4, output/TOAN8_B1_T1_2.mp4
+• Outro: chỉ part 2. Logo: cả hai part."""
+
+
 def application_data_root() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent / ".workflow_data"
@@ -238,13 +251,19 @@ class WorkflowApp:
             self.choose_batch_root,
             kind="directory",
         )
+        guide_box = ttk.LabelFrame(
+            batch_form, text="Folder & file naming", padding=8
+        )
+        guide_box.grid(
+            row=1, column=0, columnspan=4, sticky="ew", pady=(8, 0)
+        )
         ttk.Label(
-            batch_form,
-            text=(
-                "Recursively scans leaf folders for BASE.pptx, BASE_1/2 media, "
-                "and timeline_slide_BASE_1/2.txt/json. Outro is added to part 2 only."
-            ),
-        ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(5, 0))
+            guide_box,
+            text=BATCH_FOLDER_GUIDE,
+            justify="left",
+            anchor="w",
+            font="TkFixedFont",
+        ).pack(fill="x")
         self.batch_button = ttk.Button(
             batch_form, text="Scan and add to queue", command=self.submit_batch_folder
         )
