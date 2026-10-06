@@ -28,8 +28,11 @@ BATCH_FOLDER_GUIDE = """Quy ước đặt tên (ứng dụng quét đệ quy và
     TOAN7_C4_B13_T38_2.txt
 • Mỗi PPTX phải kết thúc bằng _1 hoặc _2; media dùng đúng cùng tên.
 • Timeline: <tên PPTX>.txt/json hoặc timeline_slide_<tên PPTX>.txt/json.
-• Output tự tạo: output/TOAN7_C4_B13_T38_1.mp4, output/TOAN7_C4_B13_T38_2.mp4
-• Outro: chỉ part 2. Logo: cả hai part."""
+• Output part: output/TOAN7_C4_B13_T38_1.mp4, output/TOAN7_C4_B13_T38_2.mp4
+• Tự động merge part 1 → part 2: output/TOAN7_C4_B13_T38.mp4; giữ cả 3 video.
+• Thiếu một part: vẫn dựng part có sẵn, không merge và hiển thị cảnh báo.
+• Outro: chỉ part 2. Logo: cả hai part.
+• Mỗi lần scan đều thêm job mới; output cũ chỉ được thay sau khi dựng thành công."""
 
 
 def application_data_root() -> Path:
@@ -560,11 +563,24 @@ class WorkflowApp:
             self.tree.selection_set(selected[0])
 
     def _missing_job_paths(self, job: JobRecord) -> list[str]:
-        required: list[tuple[str, Path | None]] = [("source", job.source_media)]
+        dependencies_pending = False
+        if job.status is JobStatus.WAITING and job.dependency_job_ids:
+            dependencies_ready, dependency_error = self.controller.dependency_state(job)
+            dependencies_pending = not dependencies_ready and dependency_error is None
+        required: list[tuple[str, Path | None]] = []
         if job.kind is JobKind.MERGE:
-            required.append(("video 2", job.secondary_media))
+            if not dependencies_pending:
+                required.extend(
+                    (("source", job.source_media), ("video 2", job.secondary_media))
+                )
         else:
-            required.extend((("PPTX", job.pptx), ("timeline", job.timeline)))
+            required.extend(
+                (
+                    ("source", job.source_media),
+                    ("PPTX", job.pptx),
+                    ("timeline", job.timeline),
+                )
+            )
             if job.status in {JobStatus.WAITING, JobStatus.RUNNING}:
                 settings = self.controller.settings
                 required.append(("logo", settings.logo))
@@ -581,6 +597,10 @@ class WorkflowApp:
 
     def _job_files_summary(self, job: JobRecord) -> str:
         parts: list[str] = []
+        if job.status is JobStatus.WAITING and job.dependency_job_ids:
+            dependencies_ready, dependency_error = self.controller.dependency_state(job)
+            if not dependencies_ready and dependency_error is None:
+                parts.append("Waiting for parts")
         missing = self._missing_job_paths(job)
         if missing:
             parts.append(f"Missing: {', '.join(missing)}")
@@ -589,14 +609,21 @@ class WorkflowApp:
                 "Output ready" if job.output_path.is_file() else "Output missing"
             )
         elif job.output_path.exists():
-            parts.append("Output exists")
+            parts.append(
+                "Will overwrite output" if job.overwrite_output else "Output exists"
+            )
         return "; ".join(parts) or "Ready"
 
     def _waiting_job_ready(self, job: JobRecord) -> bool:
+        dependencies_ready = True
+        if job.dependency_job_ids:
+            dependencies_ready, dependency_error = self.controller.dependency_state(job)
+            dependencies_ready = dependencies_ready and dependency_error is None
         return (
             job.status is JobStatus.WAITING
+            and dependencies_ready
             and not self._missing_job_paths(job)
-            and not job.output_path.exists()
+            and (job.overwrite_output or not job.output_path.exists())
         )
 
     def _refresh_path_indicators(self) -> None:

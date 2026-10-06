@@ -15,7 +15,7 @@ else:
 from .job_models import JobKind, JobStage, JobStatus
 from .merge_pipeline import MergeRequest, merge_videos
 from .pipeline import BuildReport, BuildRequest, WorkflowCancelled, build_video
-from .queue_controller import QueueController, QueueStateError
+from .queue_controller import QueueController
 
 
 @contextmanager
@@ -95,13 +95,6 @@ class QueueWorker:
     def stop(self, timeout: float = 10.0) -> None:
         self._stop.set()
         self._cancel.set()
-        current = self.current_job_id
-        if current is not None and self._status(current) is JobStatus.RUNNING:
-            try:
-                self.controller.mark_interrupted(current, "application closed")
-            except QueueStateError:
-                pass
-            self.events.put(WorkerEvent("interrupted", current, "application closed"))
         self._wake.set()
         if self._thread is not None:
             self._thread.join(timeout)
@@ -119,6 +112,8 @@ class QueueWorker:
                     self._wake.clear()
                     continue
                 self._cancel.clear()
+                if self._stop.is_set():
+                    self._cancel.set()
                 self._set_current(job.id)
                 self.events.put(WorkerEvent("started", job.id, None))
                 log_path = self.controller.store.root / "logs" / f"{job.id}.log"
@@ -130,6 +125,8 @@ class QueueWorker:
                             first_video=job.source_media,
                             second_video=job.secondary_media,
                             output=job.output_path,
+                            write_report=job.write_report,
+                            overwrite_output=job.overwrite_output,
                         )
                         builder = self.merge_build
                     else:
@@ -144,6 +141,7 @@ class QueueWorker:
                             outro=settings.outro if job.use_outro else None,
                             output=job.output_path,
                             write_report=job.write_report,
+                            overwrite_output=job.overwrite_output,
                         )
                         builder = self.build
                     builder(
