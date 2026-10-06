@@ -72,30 +72,33 @@ Trong phần **Global assets**, logo và outro đều tùy chọn độc lập: 
 ### Batch folder theo cấu trúc slide
 
 Tab **Batch folder** nhận một thư mục gốc rồi quét đệ quy các folder lá. Mỗi
-PPTX được ghép với part 1 hoặc part 2 theo đúng tên gốc, ví dụ:
+PPTX là một part độc lập và tên phải kết thúc bằng `_1` hoặc `_2`. Media dùng
+đúng cùng tên gốc với PPTX, ví dụ theo folder mẫu `demo_Test`:
 
 ```text
-Bài 1_Đơn thức/
-  TOAN8_B1_T1.pptx
-  TOAN8_B1_T1_1.mp4
-  timeline_slide_TOAN8_B1_T1_1.txt
-  TOAN8_B1_T1_2.wav
-  timeline_slide_TOAN8_B1_T1_2.json
+demo_Test/
+  TOAN7_C4_B13_T38_1.pptx
+  TOAN7_C4_B13_T38_1.mp4
+  timeline_slide_TOAN7_C4_B13_T38_1.txt
+  TOAN7_C4_B13_T38_2.pptx
+  TOAN7_C4_B13_T38_2.mp4
+  TOAN7_C4_B13_T38_2.txt
 ```
 
 Media hỗ trợ các đuôi `.mp4`, `.mov`, `.mkv`, `.mp3`, `.wav`, `.m4a` và
-`.aac`; timeline hỗ trợ `.txt` hoặc `.json`. Có part nào thì dựng part đó,
-không bắt buộc phải có cả hai. Kết quả nằm ngay trong folder lá:
+`.aac`; timeline hỗ trợ `.txt` hoặc `.json`, có thể đặt theo dạng
+`<tên-PPTX>.txt/json` hoặc `timeline_slide_<tên-PPTX>.txt/json`. Có part nào
+thì dựng part đó, không bắt buộc phải có cả hai. Kết quả nằm ngay trong folder lá:
 
 ```text
-Bài 1_Đơn thức/output/
-  TOAN8_B1_T1_1.mp4
-  TOAN8_B1_T1_2.mp4
+demo_Test/output/
+  TOAN7_C4_B13_T38_1.mp4
+  TOAN7_C4_B13_T38_2.mp4
 ```
 
 Thư mục `output` không bị quét lại. Output đã tồn tại hoặc đã có trong queue
-được bỏ qua và không bị ghi đè. Batch này không tạo file `*.report.json`; nếu
-gặp report cũ đi kèm một output đã hoàn thành, ứng dụng xóa report đó. Bộ file
+được bỏ qua và không bị ghi đè. Batch này không tạo file `*.report.json`; mọi
+report cũ trong folder `output` được xóa, còn các video cũ khác được giữ nguyên. Bộ file
 thiếu hoặc trùng media/timeline được báo theo từng folder, còn các bộ hợp lệ
 khác vẫn được thêm vào queue tuần tự. Logo toàn cục được áp dụng cho cả hai
 part; outro toàn cục chỉ được nối vào video part 2.

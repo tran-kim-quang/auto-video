@@ -65,6 +65,19 @@ def _matching_files(files: list[Path], stem: str, extensions: set[str]) -> list[
     )
 
 
+def _matching_timelines(files: list[Path], stem: str) -> list[Path]:
+    accepted_stems = {stem.casefold(), f"timeline_slide_{stem}".casefold()}
+    return sorted(
+        (
+            path
+            for path in files
+            if path.stem.casefold() in accepted_stems
+            and path.suffix.casefold() in TIMELINE_EXTENSIONS
+        ),
+        key=lambda path: path.name.casefold(),
+    )
+
+
 def discover_folder_jobs(root: Path) -> FolderScanResult:
     root = Path(root)
     if not root.is_dir():
@@ -80,55 +93,43 @@ def discover_folder_jobs(root: Path) -> FolderScanResult:
         )
         deck_stems = {deck.stem.casefold() for deck in decks}
         for deck in decks:
-            found_part_input = False
-            for part in (1, 2):
-                output_stem = f"{deck.stem}_{part}"
-                media = _matching_files(files, output_stem, MEDIA_EXTENSIONS)
-                timelines = _matching_files(
-                    files, f"timeline_slide_{output_stem}", TIMELINE_EXTENSIONS
-                )
-                if not media and not timelines:
-                    continue
-                found_part_input = True
-                if not media:
-                    issues.append(
-                        FolderIssue(leaf, f"{deck.stem} part {part}: missing media")
-                    )
-                    continue
-                if len(media) > 1:
-                    issues.append(
-                        FolderIssue(
-                            leaf, f"{deck.stem} part {part}: multiple media files"
-                        )
-                    )
-                    continue
-                if not timelines:
-                    issues.append(
-                        FolderIssue(leaf, f"{deck.stem} part {part}: missing timeline")
-                    )
-                    continue
-                if len(timelines) > 1:
-                    issues.append(
-                        FolderIssue(
-                            leaf, f"{deck.stem} part {part}: multiple timeline files"
-                        )
-                    )
-                    continue
-                jobs.append(
-                    FolderJob(
-                        source_media=media[0],
-                        pptx=deck,
-                        timeline=timelines[0],
-                        output=leaf / "output" / f"{output_stem}.mp4",
-                        part=part,
-                    )
-                )
-            if not found_part_input:
+            part_match = re.fullmatch(r".+_([12])", deck.stem)
+            if part_match is None:
                 issues.append(
-                    FolderIssue(leaf, f"{deck.stem}: no part 1 or 2 inputs")
+                    FolderIssue(
+                        leaf, f"{deck.stem}: PPTX name must end with _1 or _2"
+                    )
                 )
+                continue
 
-        orphan_parts: dict[tuple[str, int], str] = {}
+            part = int(part_match.group(1))
+            media = _matching_files(files, deck.stem, MEDIA_EXTENSIONS)
+            timelines = _matching_timelines(files, deck.stem)
+            if not media:
+                issues.append(FolderIssue(leaf, f"{deck.stem}: missing media"))
+                continue
+            if len(media) > 1:
+                issues.append(FolderIssue(leaf, f"{deck.stem}: multiple media files"))
+                continue
+            if not timelines:
+                issues.append(FolderIssue(leaf, f"{deck.stem}: missing timeline"))
+                continue
+            if len(timelines) > 1:
+                issues.append(
+                    FolderIssue(leaf, f"{deck.stem}: multiple timeline files")
+                )
+                continue
+            jobs.append(
+                FolderJob(
+                    source_media=media[0],
+                    pptx=deck,
+                    timeline=timelines[0],
+                    output=leaf / "output" / f"{deck.stem}.mp4",
+                    part=part,
+                )
+            )
+
+        orphan_stems: dict[str, str] = {}
         for path in files:
             stem = path.stem
             if path.suffix.casefold() in TIMELINE_EXTENSIONS and stem.casefold().startswith(
@@ -139,11 +140,10 @@ def discover_folder_jobs(root: Path) -> FolderScanResult:
                 continue
             match = re.fullmatch(r"(.+)_([12])", stem)
             if match:
-                base, part_text = match.groups()
-                orphan_parts[(base.casefold(), int(part_text))] = base
-        for (normalized_base, part), base in sorted(orphan_parts.items()):
-            if normalized_base not in deck_stems:
-                issues.append(FolderIssue(leaf, f"{base} part {part}: missing PPTX"))
+                orphan_stems[stem.casefold()] = stem
+        for normalized_stem, stem in sorted(orphan_stems.items()):
+            if normalized_stem not in deck_stems:
+                issues.append(FolderIssue(leaf, f"{stem}: missing PPTX"))
     return FolderScanResult(tuple(jobs), tuple(issues))
 
 
@@ -151,21 +151,42 @@ def _path_key(path: Path) -> str:
     return os.path.normcase(str(path.absolute()))
 
 
+def _delete_reports(root: Path) -> list[FolderIssue]:
+    issues: list[FolderIssue] = []
+    if not root.is_dir():
+        return issues
+    for leaf in _leaf_directories(root):
+        output_directory = leaf / "output"
+        if not output_directory.is_dir():
+            continue
+        try:
+            reports = list(output_directory.glob("*.report.json"))
+        except OSError as exc:
+            issues.append(FolderIssue(output_directory, str(exc)))
+            continue
+        for report in reports:
+            try:
+                report.unlink()
+            except OSError as exc:
+                issues.append(FolderIssue(output_directory, str(exc)))
+    return issues
+
+
 def queue_folder_jobs(
     controller: QueueController, root: Path
 ) -> FolderQueueResult:
+    root = Path(root)
     scan = discover_folder_jobs(root)
     queued: list[JobRecord] = []
     skipped: list[Path] = []
     issues = list(scan.issues)
+    issues.extend(_delete_reports(root))
     known_outputs = {_path_key(job.output_path) for job in controller.jobs()}
 
     for candidate in scan.jobs:
         output = candidate.output
-        report = Path(f"{output}.report.json")
         try:
             if output.exists():
-                report.unlink(missing_ok=True)
                 skipped.append(output)
                 continue
             if _path_key(output) in known_outputs:

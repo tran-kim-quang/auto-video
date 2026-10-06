@@ -19,14 +19,16 @@ from .worker import QueueWorker
 
 BATCH_FOLDER_GUIDE = """Quy ước đặt tên (ứng dụng quét đệ quy và chỉ xử lý folder lá):
 • Folder lá: tên tùy ý, ví dụ:
-  Bài 1_Đơn thức/
-    TOAN8_B1_T1.pptx
-    TOAN8_B1_T1_1.mp4
-    timeline_slide_TOAN8_B1_T1_1.txt
-    TOAN8_B1_T1_2.mp4
-    timeline_slide_TOAN8_B1_T1_2.json
-• BASE phải giống hệt tên PPTX; part chỉ là _1 hoặc _2.
-• Output tự tạo: output/TOAN8_B1_T1_1.mp4, output/TOAN8_B1_T1_2.mp4
+  demo_Test/
+    TOAN7_C4_B13_T38_1.pptx
+    TOAN7_C4_B13_T38_1.mp4
+    timeline_slide_TOAN7_C4_B13_T38_1.txt
+    TOAN7_C4_B13_T38_2.pptx
+    TOAN7_C4_B13_T38_2.mp4
+    TOAN7_C4_B13_T38_2.txt
+• Mỗi PPTX phải kết thúc bằng _1 hoặc _2; media dùng đúng cùng tên.
+• Timeline: <tên PPTX>.txt/json hoặc timeline_slide_<tên PPTX>.txt/json.
+• Output tự tạo: output/TOAN7_C4_B13_T38_1.mp4, output/TOAN7_C4_B13_T38_2.mp4
 • Outro: chỉ part 2. Logo: cả hai part."""
 
 

@@ -237,9 +237,9 @@ def test_submit_batch_folder_queues_pdf_style_jobs_without_reports(
     leaf = tmp_path / "Toan8" / "Bài 1_Đơn thức"
     leaf.mkdir(parents=True)
     for name in (
-        "TOAN8_B1_T1.pptx",
-        "TOAN8_B1_T1_1.mp4",
-        "timeline_slide_TOAN8_B1_T1_1.txt",
+        "TOAN7_C4_B13_T38_1.pptx",
+        "TOAN7_C4_B13_T38_1.mp4",
+        "timeline_slide_TOAN7_C4_B13_T38_1.txt",
     ):
         (leaf / name).write_bytes(b"input")
     app = WorkflowApp.__new__(WorkflowApp)
@@ -257,7 +257,7 @@ def test_submit_batch_folder_queues_pdf_style_jobs_without_reports(
 
     jobs = app.controller.jobs()
     assert len(jobs) == 1
-    assert jobs[0].output_path == leaf / "output" / "TOAN8_B1_T1_1.mp4"
+    assert jobs[0].output_path == leaf / "output" / "TOAN7_C4_B13_T38_1.mp4"
     assert jobs[0].write_report is False
     assert app.worker.wakes == 1
     assert app.status_var.get() == "Batch: 1 added, 0 skipped, 0 issue(s)"
@@ -286,9 +286,11 @@ def test_batch_tab_guide_contains_folder_and_file_naming_example() -> None:
     guide = ui_module.BATCH_FOLDER_GUIDE
 
     assert "Folder lá: tên tùy ý" in guide
-    assert "Bài 1_Đơn thức/" in guide
-    assert "TOAN8_B1_T1.pptx" in guide
-    assert "TOAN8_B1_T1_1.mp4" in guide
-    assert "timeline_slide_TOAN8_B1_T1_2.json" in guide
-    assert "output/TOAN8_B1_T1_2.mp4" in guide
+    assert "demo_Test/" in guide
+    assert "TOAN7_C4_B13_T38_1.pptx" in guide
+    assert "TOAN7_C4_B13_T38_1.mp4" in guide
+    assert "timeline_slide_TOAN7_C4_B13_T38_1.txt" in guide
+    assert "TOAN7_C4_B13_T38_2.pptx" in guide
+    assert "TOAN7_C4_B13_T38_2.txt" in guide
+    assert "output/TOAN7_C4_B13_T38_2.mp4" in guide
     assert "Outro: chỉ part 2" in guide
