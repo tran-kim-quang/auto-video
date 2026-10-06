@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,6 +21,7 @@ class FolderJob:
     timeline: Path
     output: Path
     part: int
+    lesson_stem: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +80,25 @@ def _matching_timelines(files: list[Path], stem: str) -> list[Path]:
     )
 
 
+def _group_parts(
+    jobs: Iterable[FolderJob],
+) -> list[tuple[Path, str, dict[int, FolderJob]]]:
+    grouped: dict[tuple[str, str], dict[int, FolderJob]] = {}
+    leaves: dict[tuple[str, str], Path] = {}
+    display_stems: dict[tuple[str, str], str] = {}
+    for job in jobs:
+        leaf = job.pptx.parent
+        key = (str(leaf.absolute()).casefold(), job.lesson_stem.casefold())
+        grouped.setdefault(key, {})[job.part] = job
+        leaves[key] = leaf
+        if key not in display_stems or job.part == 1:
+            display_stems[key] = job.lesson_stem
+    return [
+        (leaves[key], display_stems[key], grouped[key])
+        for key in sorted(grouped)
+    ]
+
+
 def discover_folder_jobs(root: Path) -> FolderScanResult:
     root = Path(root)
     if not root.is_dir():
@@ -126,6 +147,7 @@ def discover_folder_jobs(root: Path) -> FolderScanResult:
                     timeline=timelines[0],
                     output=leaf / "output" / f"{deck.stem}.mp4",
                     part=part,
+                    lesson_stem=deck.stem[:-2],
                 )
             )
 
@@ -143,6 +165,12 @@ def discover_folder_jobs(root: Path) -> FolderScanResult:
         for normalized_stem, stem in sorted(orphan_stems.items()):
             if normalized_stem not in deck_stems:
                 issues.append(FolderIssue(leaf, f"{stem}: missing PPTX"))
+    for leaf, lesson_stem, parts in _group_parts(jobs):
+        if len(parts) == 1:
+            missing_part = 2 if 1 in parts else 1
+            issues.append(
+                FolderIssue(leaf, f"{lesson_stem}: missing part {missing_part}")
+            )
     return FolderScanResult(tuple(jobs), tuple(issues))
 
 
@@ -177,23 +205,46 @@ def queue_folder_jobs(
     issues = list(scan.issues)
     issues.extend(_delete_reports(root))
 
-    for candidate in scan.jobs:
-        output = candidate.output
+    for leaf, lesson_stem, parts in _group_parts(scan.jobs):
+        enqueued_parts: dict[int, JobRecord] = {}
+        for part in sorted(parts):
+            candidate = parts[part]
+            output = candidate.output
+            try:
+                output.parent.mkdir(parents=True, exist_ok=True)
+                job = controller.enqueue(
+                    source_media=candidate.source_media,
+                    pptx=candidate.pptx,
+                    timeline=candidate.timeline,
+                    output_name=output.name,
+                    output_directory=output.parent,
+                    write_report=False,
+                    use_outro=candidate.part == 2,
+                    overwrite_output=True,
+                )
+            except (OSError, ValueError) as exc:
+                issues.append(FolderIssue(candidate.pptx.parent, str(exc)))
+                continue
+            queued.append(job)
+            enqueued_parts[part] = job
+
+        if set(enqueued_parts) != {1, 2}:
+            continue
+        part1 = enqueued_parts[1]
+        part2 = enqueued_parts[2]
         try:
-            output.parent.mkdir(parents=True, exist_ok=True)
-            job = controller.enqueue(
-                source_media=candidate.source_media,
-                pptx=candidate.pptx,
-                timeline=candidate.timeline,
-                output_name=output.name,
-                output_directory=output.parent,
+            merged = controller.enqueue_merge(
+                first_video=part1.output_path,
+                second_video=part2.output_path,
+                output_name=f"{lesson_stem}.mp4",
+                output_directory=part1.output_directory,
                 write_report=False,
-                use_outro=candidate.part == 2,
                 overwrite_output=True,
+                dependency_job_ids=(part1.id, part2.id),
             )
         except (OSError, ValueError) as exc:
-            issues.append(FolderIssue(candidate.pptx.parent, str(exc)))
+            issues.append(FolderIssue(leaf, str(exc)))
             continue
-        queued.append(job)
+        queued.append(merged)
 
     return FolderQueueResult(tuple(queued), tuple(skipped), tuple(issues))

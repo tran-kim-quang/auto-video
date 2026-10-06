@@ -260,7 +260,8 @@ def test_submit_batch_folder_queues_pdf_style_jobs_without_reports(
     assert jobs[0].output_path == leaf / "output" / "TOAN7_C4_B13_T38_1.mp4"
     assert jobs[0].write_report is False
     assert app.worker.wakes == 1
-    assert app.status_var.get() == "Batch: 1 added, 0 skipped, 0 issue(s)"
+    assert app.status_var.get() == "Batch: 1 added, 0 skipped, 1 issue(s)"
+    assert "TOAN7_C4_B13_T38: missing part 2" in app._warnings[0]
 
 
 def test_part_1_file_status_does_not_require_global_outro(tmp_path: Path) -> None:

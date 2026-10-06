@@ -32,7 +32,9 @@ def test_discovers_pdf_style_parts_only_in_recursive_leaf_folders(
 
     result = discover_folder_jobs(root)
 
-    assert result.issues == ()
+    assert [(issue.folder, issue.message) for issue in result.issues] == [
+        (second_leaf, "TOAN8_B3_T4: missing part 1")
+    ]
     assert [job.output for job in result.jobs] == [
         first_leaf / "output" / "TOAN7_C4_B13_T38_1.mp4",
         first_leaf / "output" / "TOAN7_C4_B13_T38_2.mp4",
@@ -118,6 +120,7 @@ def test_rescan_queues_every_job_and_keeps_existing_video_until_render(
     ):
         _file(leaf / name)
     existing = _file(leaf / "output" / "TOAN8_B1_T1_1.mp4")
+    existing_merged = _file(leaf / "output" / "TOAN8_B1_T1.mp4")
     matching_report = _file(Path(f"{existing}.report.json"))
     stale_report = _file(leaf / "output" / "old_fixed.mp4.report.json")
     old_video = _file(leaf / "output" / "old_fixed.mp4")
@@ -128,7 +131,8 @@ def test_rescan_queues_every_job_and_keeps_existing_video_until_render(
 
     assert [job.output_path for job in first.queued] == [
         leaf / "output" / "TOAN8_B1_T1_1.mp4",
-        leaf / "output" / "TOAN8_B1_T1_2.mp4"
+        leaf / "output" / "TOAN8_B1_T1_2.mp4",
+        leaf / "output" / "TOAN8_B1_T1.mp4",
     ]
     assert all(job.write_report is False for job in first.queued)
     assert all(job.overwrite_output is True for job in first.queued)
@@ -136,13 +140,28 @@ def test_rescan_queues_every_job_and_keeps_existing_video_until_render(
     assert not matching_report.exists()
     assert not stale_report.exists()
     assert existing.read_bytes() == b"input"
+    assert existing_merged.read_bytes() == b"input"
     assert old_video.exists()
     assert [job.output_path for job in second.queued] == [
         leaf / "output" / "TOAN8_B1_T1_1.mp4",
         leaf / "output" / "TOAN8_B1_T1_2.mp4",
+        leaf / "output" / "TOAN8_B1_T1.mp4",
     ]
+    assert first.queued[2].source_media == first.queued[0].output_path
+    assert first.queued[2].secondary_media == first.queued[1].output_path
+    assert first.queued[2].dependency_job_ids == (
+        first.queued[0].id,
+        first.queued[1].id,
+    )
+    assert second.queued[2].dependency_job_ids == (
+        second.queued[0].id,
+        second.queued[1].id,
+    )
+    assert set(first.queued[2].dependency_job_ids).isdisjoint(
+        second.queued[2].dependency_job_ids
+    )
     assert second.skipped == ()
-    assert len(controller.jobs()) == 4
+    assert len(controller.jobs()) == 6
 
 
 def test_batch_marks_outro_for_part_2_only(tmp_path: Path) -> None:
@@ -161,4 +180,55 @@ def test_batch_marks_outro_for_part_2_only(tmp_path: Path) -> None:
 
     result = queue_folder_jobs(controller, root)
 
-    assert [job.use_outro for job in result.queued] == [False, True]
+    slide_jobs = [job for job in result.queued if job.kind.value == "slide"]
+    assert [job.use_outro for job in slide_jobs] == [False, True]
+    assert [job.kind.value for job in result.queued] == ["slide", "slide", "merge"]
+    assert all(job.write_report is False for job in result.queued)
+    assert all(job.overwrite_output is True for job in result.queued)
+
+
+def test_similar_lesson_names_in_one_leaf_are_grouped_independently(
+    tmp_path: Path,
+) -> None:
+    leaf = tmp_path / "Bài 1"
+    for stem in ("LESSON_X_1", "LESSON_X_2", "LESSON_1_1", "LESSON_1_2"):
+        _file(leaf / f"{stem}.pptx")
+        _file(leaf / f"{stem}.mp4")
+        _file(leaf / f"{stem}.txt")
+    controller = QueueController(JsonStore(tmp_path / "data"))
+
+    result = queue_folder_jobs(controller, tmp_path)
+
+    assert result.issues == ()
+    assert [job.output_name for job in result.queued] == [
+        "LESSON_1_1.mp4",
+        "LESSON_1_2.mp4",
+        "LESSON_1.mp4",
+        "LESSON_X_1.mp4",
+        "LESSON_X_2.mp4",
+        "LESSON_X.mp4",
+    ]
+    assert result.queued[2].dependency_job_ids == (
+        result.queued[0].id,
+        result.queued[1].id,
+    )
+    assert result.queued[5].dependency_job_ids == (
+        result.queued[3].id,
+        result.queued[4].id,
+    )
+
+
+def test_single_valid_part_is_queued_and_reports_missing_counterpart(
+    tmp_path: Path,
+) -> None:
+    leaf = tmp_path / "Bài 1"
+    for name in ("ONLY_2.pptx", "ONLY_2.mp4", "ONLY_2.txt"):
+        _file(leaf / name)
+    controller = QueueController(JsonStore(tmp_path / "data"))
+
+    result = queue_folder_jobs(controller, tmp_path)
+
+    assert [job.output_name for job in result.queued] == ["ONLY_2.mp4"]
+    assert [(issue.folder, issue.message) for issue in result.issues] == [
+        (leaf, "ONLY: missing part 1")
+    ]
