@@ -95,6 +95,7 @@ class JobRecord:
     write_report: bool = True
     use_outro: bool = True
     overwrite_output: bool = False
+    dependency_job_ids: tuple[str, ...] = ()
     status: JobStatus = JobStatus.WAITING
     stage: JobStage | None = None
     error: str | None = None
@@ -113,6 +114,7 @@ class JobRecord:
         write_report: bool = True,
         use_outro: bool = True,
         overwrite_output: bool = False,
+        dependency_job_ids: tuple[str, ...] = (),
         status: JobStatus = JobStatus.WAITING,
     ) -> JobRecord:
         return cls(
@@ -126,6 +128,7 @@ class JobRecord:
             write_report=write_report,
             use_outro=use_outro,
             overwrite_output=overwrite_output,
+            dependency_job_ids=tuple(str(item) for item in dependency_job_ids),
             status=status,
         )
 
@@ -137,6 +140,9 @@ class JobRecord:
         second_video: Path,
         output_name: str,
         output_directory: Path,
+        write_report: bool = True,
+        overwrite_output: bool = False,
+        dependency_job_ids: tuple[str, ...] = (),
         status: JobStatus = JobStatus.WAITING,
     ) -> JobRecord:
         return cls(
@@ -149,6 +155,9 @@ class JobRecord:
             output_directory=Path(output_directory),
             kind=JobKind.MERGE,
             secondary_media=Path(second_video),
+            write_report=write_report,
+            overwrite_output=overwrite_output,
+            dependency_job_ids=tuple(str(item) for item in dependency_job_ids),
             status=status,
         )
 
@@ -172,6 +181,7 @@ class JobRecord:
             "write_report": self.write_report,
             "use_outro": self.use_outro,
             "overwrite_output": self.overwrite_output,
+            "dependency_job_ids": list(self.dependency_job_ids),
             "status": self.status.value,
             "stage": self.stage.value if self.stage else None,
             "error": self.error,
@@ -210,6 +220,9 @@ class JobRecord:
             write_report=bool(data.get("write_report", True)),
             use_outro=use_outro,
             overwrite_output=overwrite_output,
+            dependency_job_ids=tuple(
+                str(item) for item in data.get("dependency_job_ids", ())
+            ),
             status=JobStatus(data["status"]),
             stage=JobStage(data["stage"]) if data.get("stage") else None,
             error=data.get("error"),

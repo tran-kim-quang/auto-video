@@ -47,26 +47,42 @@ class QueueController:
             self.store.save_settings(self._settings)
             return self._settings
 
-    def _validate_job_paths(self, job: JobRecord) -> str | None:
-        if job.kind is JobKind.MERGE:
-            required = (
-                ("source_media", job.source_media),
-                ("second_video", job.secondary_media),
-            )
-        else:
-            required = (
-                ("source_media", job.source_media),
-                ("pptx", job.pptx),
-                ("timeline", job.timeline),
-            )
-        for label, path in required:
-            if path is None or not Path(path).is_file():
-                return f"{label} file does not exist: {path}"
+    def _validate_job_paths(
+        self, job: JobRecord, *, allow_missing_inputs: bool = False
+    ) -> str | None:
+        if not allow_missing_inputs:
+            if job.kind is JobKind.MERGE:
+                required = (
+                    ("source_media", job.source_media),
+                    ("second_video", job.secondary_media),
+                )
+            else:
+                required = (
+                    ("source_media", job.source_media),
+                    ("pptx", job.pptx),
+                    ("timeline", job.timeline),
+                )
+            for label, path in required:
+                if path is None or not Path(path).is_file():
+                    return f"{label} file does not exist: {path}"
         if not job.output_directory.is_dir():
             return f"output directory does not exist: {job.output_directory}"
         if job.output_path.exists() and not job.overwrite_output:
             return f"output already exists: {job.output_path}"
         return None
+
+    def dependency_state(self, job: JobRecord) -> tuple[bool, str | None]:
+        with self._lock:
+            if not job.dependency_job_ids:
+                return True, None
+            jobs_by_id = {candidate.id: candidate for candidate in self._jobs}
+            for dependency_id in job.dependency_job_ids:
+                dependency = jobs_by_id.get(dependency_id)
+                if dependency is None:
+                    return False, f"missing dependency: {dependency_id}"
+                if dependency.status is not JobStatus.COMPLETED:
+                    return False, None
+            return True, None
 
     def enqueue(
         self,
@@ -105,17 +121,28 @@ class QueueController:
         second_video: Path,
         output_name: str,
         output_directory: Path,
+        write_report: bool = True,
+        overwrite_output: bool = False,
+        dependency_job_ids: tuple[str, ...] = (),
     ) -> JobRecord:
         job = JobRecord.new_merge(
             first_video=first_video,
             second_video=second_video,
             output_name=output_name,
             output_directory=output_directory,
+            write_report=write_report,
+            overwrite_output=overwrite_output,
+            dependency_job_ids=dependency_job_ids,
         )
-        error = self._validate_job_paths(job)
-        if error:
-            raise ValueError(error)
         with self._lock:
+            _ready, dependency_error = self.dependency_state(job)
+            if dependency_error:
+                raise ValueError(dependency_error)
+            error = self._validate_job_paths(
+                job, allow_missing_inputs=bool(job.dependency_job_ids)
+            )
+            if error:
+                raise ValueError(error)
             self._jobs.append(job)
             self.store.save_jobs(self._jobs)
         return job
@@ -136,6 +163,19 @@ class QueueController:
             changed = False
             for index, job in enumerate(self._jobs):
                 if job.status is not JobStatus.WAITING:
+                    continue
+                dependencies_ready, dependency_error = self.dependency_state(job)
+                if dependency_error:
+                    self._jobs[index] = replace(
+                        job,
+                        status=JobStatus.FAILED,
+                        error=dependency_error,
+                        stage=None,
+                        finished_at=utc_now(),
+                    )
+                    changed = True
+                    continue
+                if not dependencies_ready:
                     continue
                 if job.kind is JobKind.SLIDE and not self._globals_ready(job):
                     continue
@@ -235,6 +275,19 @@ class QueueController:
             index = self._index(job_id)
             if self._jobs[index].status is not JobStatus.WAITING:
                 raise QueueStateError("only waiting jobs can be removed")
+            dependent = next(
+                (
+                    job
+                    for job in self._jobs
+                    if job.status is JobStatus.WAITING
+                    and job_id in job.dependency_job_ids
+                ),
+                None,
+            )
+            if dependent is not None:
+                raise QueueStateError(
+                    f"remove dependent job {dependent.output_name} first"
+                )
             self._jobs.pop(index)
             self.store.save_jobs(self._jobs)
 

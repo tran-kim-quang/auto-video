@@ -146,6 +146,38 @@ def test_merge_job_round_trips_both_video_paths(tmp_path: Path) -> None:
     assert loaded.timeline is None
 
 
+def test_merge_job_round_trips_dependencies_and_batch_flags(tmp_path: Path) -> None:
+    store = JsonStore(tmp_path / "data")
+    job = JobRecord.new_merge(
+        first_video=tmp_path / "part_1.mp4",
+        second_video=tmp_path / "part_2.mp4",
+        output_name="lesson",
+        output_directory=tmp_path / "output",
+        write_report=False,
+        overwrite_output=True,
+        dependency_job_ids=("part-1-job", "part-2-job"),
+    )
+
+    store.save_jobs([job])
+
+    payload = json.loads((store.root / "jobs.json").read_text(encoding="utf-8"))
+    loaded = store.load_jobs()[0]
+    assert payload["jobs"][0]["dependency_job_ids"] == [
+        "part-1-job",
+        "part-2-job",
+    ]
+    assert loaded.dependency_job_ids == ("part-1-job", "part-2-job")
+    assert loaded.write_report is False
+    assert loaded.overwrite_output is True
+
+
+def test_legacy_job_defaults_to_no_dependencies(tmp_path: Path) -> None:
+    payload = _job(tmp_path).to_dict()
+    payload.pop("dependency_job_ids", None)
+
+    assert JobRecord.from_dict(payload).dependency_job_ids == ()
+
+
 def test_legacy_job_without_kind_loads_as_slide_job(tmp_path: Path) -> None:
     payload = _job(tmp_path).to_dict()
     payload.pop("kind", None)

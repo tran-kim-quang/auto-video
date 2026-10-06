@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from video_workflow.job_models import JobStage, JobStatus
+from video_workflow.job_models import JobRecord, JobStage, JobStatus
 from video_workflow.json_store import JsonStore
 from video_workflow.queue_controller import QueueController, QueueStateError
 
@@ -44,6 +44,42 @@ def _enqueue(
         output_name=name,
         output_directory=tmp_path / "out",
     )
+
+
+def _enqueue_dependent_merge(
+    controller: QueueController,
+    files: dict[str, Path],
+    tmp_path: Path,
+    *,
+    prefix: str = "lesson",
+):
+    part1 = controller.enqueue(
+        source_media=files["source_media"],
+        pptx=files["pptx"],
+        timeline=files["timeline"],
+        output_name=f"{prefix}_1",
+        output_directory=tmp_path / "out",
+        use_outro=False,
+        overwrite_output=True,
+    )
+    part2 = controller.enqueue(
+        source_media=files["source_media"],
+        pptx=files["pptx"],
+        timeline=files["timeline"],
+        output_name=f"{prefix}_2",
+        output_directory=tmp_path / "out",
+        overwrite_output=True,
+    )
+    merged = controller.enqueue_merge(
+        first_video=part1.output_path,
+        second_video=part2.output_path,
+        output_name=prefix,
+        output_directory=tmp_path / "out",
+        write_report=False,
+        overwrite_output=True,
+        dependency_job_ids=(part1.id, part2.id),
+    )
+    return part1, part2, merged
 
 
 def test_recovers_running_jobs_and_claims_only_one_in_creation_order(
@@ -146,6 +182,134 @@ def test_overwrite_jobs_with_the_same_existing_output_are_claimed_in_order(
     controller.mark_completed(jobs[0].id)
     assert controller.claim_next().id == jobs[1].id
     assert output.read_bytes() == b"previous-video"
+
+
+def test_dependent_merge_waits_through_part_failure_and_runs_after_retry(
+    tmp_path: Path,
+) -> None:
+    controller, files = _controller(tmp_path)
+    part1, part2, merged = _enqueue_dependent_merge(controller, files, tmp_path)
+    unrelated = _enqueue(controller, files, tmp_path, "unrelated")
+
+    assert controller.claim_next().id == part1.id
+    controller.mark_failed(part1.id, "render failed")
+    assert controller.claim_next().id == part2.id
+    part2.output_path.write_bytes(b"part-2")
+    controller.mark_completed(part2.id)
+    assert controller.claim_next().id == unrelated.id
+    controller.mark_completed(unrelated.id)
+    controller.retry(part1.id)
+    assert controller.claim_next().id == part1.id
+    part1.output_path.write_bytes(b"part-1")
+    controller.mark_completed(part1.id)
+
+    assert controller.claim_next().id == merged.id
+
+
+def test_dependent_merge_groups_with_same_paths_keep_distinct_job_ids(
+    tmp_path: Path,
+) -> None:
+    controller, files = _controller(tmp_path)
+    first_group = _enqueue_dependent_merge(controller, files, tmp_path)
+    second_group = _enqueue_dependent_merge(controller, files, tmp_path)
+
+    assert first_group[2].dependency_job_ids == (
+        first_group[0].id,
+        first_group[1].id,
+    )
+    assert second_group[2].dependency_job_ids == (
+        second_group[0].id,
+        second_group[1].id,
+    )
+    assert set(first_group[2].dependency_job_ids).isdisjoint(
+        second_group[2].dependency_job_ids
+    )
+
+
+def test_persisted_merge_with_missing_dependency_fails_clearly(
+    tmp_path: Path,
+) -> None:
+    controller, _files = _controller(tmp_path)
+    job = JobRecord.new_merge(
+        first_video=tmp_path / "out" / "lesson_1.mp4",
+        second_video=tmp_path / "out" / "lesson_2.mp4",
+        output_name="lesson",
+        output_directory=tmp_path / "out",
+        dependency_job_ids=("missing-job",),
+    )
+    controller.store.save_jobs([job])
+    controller.reload()
+
+    assert controller.claim_next() is None
+    failed = controller.jobs()[0]
+    assert failed.status is JobStatus.FAILED
+    assert failed.error == "missing dependency: missing-job"
+
+
+def test_enqueue_merge_rejects_unknown_dependency_id(tmp_path: Path) -> None:
+    controller, _files = _controller(tmp_path)
+
+    with pytest.raises(ValueError, match="missing dependency"):
+        controller.enqueue_merge(
+            first_video=tmp_path / "out" / "lesson_1.mp4",
+            second_video=tmp_path / "out" / "lesson_2.mp4",
+            output_name="lesson",
+            output_directory=tmp_path / "out",
+            dependency_job_ids=("missing-job",),
+        )
+
+
+def test_remove_rejects_part_referenced_by_waiting_merge(tmp_path: Path) -> None:
+    controller, files = _controller(tmp_path)
+    part1, _part2, merged = _enqueue_dependent_merge(controller, files, tmp_path)
+
+    with pytest.raises(QueueStateError, match="remove dependent.*first"):
+        controller.remove(part1.id)
+
+    controller.remove(merged.id)
+    controller.remove(part1.id)
+
+
+def test_recovery_keeps_merge_waiting_until_interrupted_part_is_retried(
+    tmp_path: Path,
+) -> None:
+    controller, files = _controller(tmp_path)
+    part1, part2, merged = _enqueue_dependent_merge(controller, files, tmp_path)
+    assert controller.claim_next().id == part1.id
+
+    reloaded = QueueController(JsonStore(tmp_path / "data"))
+    reloaded.recover_startup()
+    assert [job.status for job in reloaded.jobs()] == [
+        JobStatus.INTERRUPTED,
+        JobStatus.WAITING,
+        JobStatus.WAITING,
+    ]
+    reloaded.retry(part1.id)
+    assert reloaded.claim_next().id == part2.id
+    part2.output_path.write_bytes(b"part-2")
+    reloaded.mark_completed(part2.id)
+    assert reloaded.claim_next().id == part1.id
+    part1.output_path.write_bytes(b"part-1")
+    reloaded.mark_completed(part1.id)
+
+    assert reloaded.claim_next().id == merged.id
+
+
+def test_completed_dependency_with_deleted_output_fails_merge_validation(
+    tmp_path: Path,
+) -> None:
+    controller, files = _controller(tmp_path)
+    part1, part2, merged = _enqueue_dependent_merge(controller, files, tmp_path)
+    for part, content in ((part1, b"part-1"), (part2, b"part-2")):
+        assert controller.claim_next().id == part.id
+        part.output_path.write_bytes(content)
+        controller.mark_completed(part.id)
+    part2.output_path.unlink()
+
+    assert controller.claim_next() is None
+    failed = next(job for job in controller.jobs() if job.id == merged.id)
+    assert failed.status is JobStatus.FAILED
+    assert "second_video file does not exist" in (failed.error or "")
 
 
 def test_transitions_retry_remove_and_stage_rules(tmp_path: Path) -> None:
