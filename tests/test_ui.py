@@ -240,6 +240,9 @@ def test_submit_batch_folder_queues_pdf_style_jobs_without_reports(
         "TOAN7_C4_B13_T38_1.pptx",
         "TOAN7_C4_B13_T38_1.mp4",
         "timeline_slide_TOAN7_C4_B13_T38_1.txt",
+        "TOAN7_C4_B13_T38_2.pptx",
+        "TOAN7_C4_B13_T38_2.mp4",
+        "TOAN7_C4_B13_T38_2.txt",
     ):
         (leaf / name).write_bytes(b"input")
     app = WorkflowApp.__new__(WorkflowApp)
@@ -256,12 +259,15 @@ def test_submit_batch_folder_queues_pdf_style_jobs_without_reports(
     app.submit_batch_folder()
 
     jobs = app.controller.jobs()
-    assert len(jobs) == 1
+    assert len(jobs) == 3
     assert jobs[0].output_path == leaf / "output" / "TOAN7_C4_B13_T38_1.mp4"
-    assert jobs[0].write_report is False
+    assert jobs[1].output_path == leaf / "output" / "TOAN7_C4_B13_T38_2.mp4"
+    assert jobs[2].output_path == leaf / "output" / "TOAN7_C4_B13_T38.mp4"
+    assert all(job.write_report is False for job in jobs)
+    assert [job.kind.value for job in jobs] == ["slide", "slide", "merge"]
     assert app.worker.wakes == 1
-    assert app.status_var.get() == "Batch: 1 added, 0 skipped, 1 issue(s)"
-    assert "TOAN7_C4_B13_T38: missing part 2" in app._warnings[0]
+    assert app.status_var.get() == "Batch: 3 added, 0 skipped, 0 issue(s)"
+    assert app._warnings == []
 
 
 def test_part_1_file_status_does_not_require_global_outro(tmp_path: Path) -> None:
@@ -301,6 +307,50 @@ def test_waiting_batch_job_can_overwrite_an_existing_output(tmp_path: Path) -> N
     assert app._job_files_summary(job) == "Will overwrite output"
 
 
+def test_dependent_merge_waits_without_marking_future_part_outputs_missing(
+    tmp_path: Path,
+) -> None:
+    for name in ("source.mp4", "slides.pptx", "timeline.txt"):
+        (tmp_path / name).write_bytes(b"input")
+    output = tmp_path / "output"
+    output.mkdir()
+    controller = QueueController(JsonStore(tmp_path / "data"))
+    parts = [
+        controller.enqueue(
+            source_media=tmp_path / "source.mp4",
+            pptx=tmp_path / "slides.pptx",
+            timeline=tmp_path / "timeline.txt",
+            output_name=f"lesson_{part}",
+            output_directory=output,
+            overwrite_output=True,
+        )
+        for part in (1, 2)
+    ]
+    merged = controller.enqueue_merge(
+        first_video=parts[0].output_path,
+        second_video=parts[1].output_path,
+        output_name="lesson",
+        output_directory=output,
+        write_report=False,
+        overwrite_output=True,
+        dependency_job_ids=(parts[0].id, parts[1].id),
+    )
+    app = WorkflowApp.__new__(WorkflowApp)
+    app.controller = controller
+
+    assert app._missing_job_paths(merged) == []
+    assert app._waiting_job_ready(merged) is False
+    assert app._job_files_summary(merged) == "Waiting for parts"
+
+    for part in parts:
+        assert controller.claim_next().id == part.id
+        part.output_path.write_bytes(b"rendered")
+        controller.mark_completed(part.id)
+
+    assert app._waiting_job_ready(merged) is True
+    assert app._job_files_summary(merged) == "Ready"
+
+
 def test_batch_tab_guide_contains_folder_and_file_naming_example() -> None:
     guide = ui_module.BATCH_FOLDER_GUIDE
 
@@ -312,5 +362,8 @@ def test_batch_tab_guide_contains_folder_and_file_naming_example() -> None:
     assert "TOAN7_C4_B13_T38_2.pptx" in guide
     assert "TOAN7_C4_B13_T38_2.txt" in guide
     assert "output/TOAN7_C4_B13_T38_2.mp4" in guide
+    assert "output/TOAN7_C4_B13_T38.mp4" in guide
+    assert "giữ cả 3 video" in guide
+    assert "Tự động merge part 1 → part 2" in guide
     assert "Outro: chỉ part 2" in guide
     assert "Mỗi lần scan đều thêm job mới" in guide

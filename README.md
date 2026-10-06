@@ -91,23 +91,29 @@ demo_Test/
 
 Media hỗ trợ các đuôi `.mp4`, `.mov`, `.mkv`, `.mp3`, `.wav`, `.m4a` và
 `.aac`; timeline hỗ trợ `.txt` hoặc `.json`, có thể đặt theo dạng
-`<tên-PPTX>.txt/json` hoặc `timeline_slide_<tên-PPTX>.txt/json`. Có part nào
-thì dựng part đó, không bắt buộc phải có cả hai. Kết quả nằm ngay trong folder lá:
+`<tên-PPTX>.txt/json` hoặc `timeline_slide_<tên-PPTX>.txt/json`. Nếu chỉ có
+một part hợp lệ, ứng dụng vẫn dựng part đó, không merge và cảnh báo part còn
+thiếu. Khi có đủ cặp cùng tên gốc, ứng dụng dựng hai part rồi tự ghép theo thứ
+tự part 1 → part 2. Kết quả nằm ngay trong folder lá:
 
 ```text
 demo_Test/output/
   TOAN7_C4_B13_T38_1.mp4
   TOAN7_C4_B13_T38_2.mp4
+  TOAN7_C4_B13_T38.mp4
 ```
 
 Thư mục `output` không bị quét lại. Mỗi lần bấm **Scan & Add** đều thêm lại mọi
 bộ file hợp lệ, không phụ thuộc trạng thái job cũ hay việc output đã tồn tại;
-các job trùng output được chạy tuần tự. Khi dựng thành công, video mới thay thế
-output cũ; nếu job lỗi thì output cũ vẫn được giữ nguyên. Batch này không tạo
-file `*.report.json`; mọi report cũ trong folder `output` được xóa, còn các video
-cũ khác được giữ nguyên. Bộ file thiếu hoặc trùng media/timeline được báo theo
-từng folder, còn các bộ hợp lệ khác vẫn được thêm vào queue tuần tự. Logo toàn
-cục được áp dụng cho cả hai part; outro toàn cục chỉ được nối vào video part 2.
+cặp part và merge mới có dependency riêng, không dùng trạng thái hay output của
+lần scan trước. Các job trùng output được chạy tuần tự. Video part hoặc video
+tổng mới chỉ thay thế output cũ sau khi verify thành công; nếu job lỗi thì output
+cũ vẫn được giữ nguyên. Cả ba MP4 được giữ lại. Batch này không tạo file
+`*.report.json`; mọi report cũ trong folder `output` được xóa, còn các video cũ
+khác được giữ nguyên. Bộ file thiếu hoặc trùng media/timeline được báo theo từng
+folder, còn các bộ hợp lệ khác vẫn được thêm vào queue tuần tự. Logo toàn cục
+được áp dụng cho cả hai part; outro toàn cục chỉ được nối vào video part 2 và
+không được chèn thêm khi merge.
 
 Tab **Merge 2 videos** tạo job ghép theo thứ tự **Video 1 → Video 2**. Hai video được chuẩn hóa độc lập về 1280×720, 24 fps, H.264/AAC trước khi ghép; video dọc được giữ trọn khung với viền đen và video không có audio được thêm silence. Logo và outro toàn cục không áp dụng cho loại job này.
 
@@ -115,7 +121,7 @@ Cả job dựng slide và job ghép video dùng chung một queue FIFO. Cột **
 
 Trình chọn file/thư mục tự quét lại nội dung đang hiển thị, còn các ô đường dẫn và cột **Files** trong queue cập nhật trạng thái filesystem mỗi giây. Nếu một job lỗi chỉ vì file đầu vào tạm thời biến mất, ứng dụng tự đưa job về cuối queue khi file xuất hiện lại đúng đường dẫn.
 
-Queue và lịch sử nằm trong `.workflow_data/jobs.json`. Job đang chạy khi ứng dụng đóng sẽ thành `interrupted` và có thể **Retry**. Chi tiết lỗi nằm trong `.workflow_data/logs`. Ứng dụng chỉ lưu đường dẫn đầu vào; nếu file bị di chuyển, job sẽ lỗi và cần chọn lại đúng file. Job đơn lẻ và job ghép không ghi đè output có sẵn, đồng thời vẫn tạo `<output>.report.json`; riêng job được thêm từ tab **Batch folder** ghi đè an toàn và chỉ xuất MP4 cuối.
+Queue và lịch sử nằm trong `.workflow_data/jobs.json`. Job đang chạy khi ứng dụng đóng sẽ thành `interrupted` và có thể **Retry**. Chi tiết lỗi nằm trong `.workflow_data/logs`. Ứng dụng chỉ lưu đường dẫn đầu vào; nếu file bị di chuyển, job sẽ lỗi và cần chọn lại đúng file. Job đơn lẻ và job ghép thủ công không ghi đè output có sẵn, đồng thời vẫn tạo `<output>.report.json`; các job render và merge từ tab **Batch folder** ghi đè an toàn và chỉ xuất MP4.
 
 ## Yêu cầu
 
