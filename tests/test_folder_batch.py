@@ -91,6 +91,18 @@ def test_reports_decks_without_parts_and_parts_without_a_pptx(tmp_path: Path) ->
     ]
 
 
+def test_reports_direct_timeline_without_a_pptx(tmp_path: Path) -> None:
+    leaf = tmp_path / "Bài 1"
+    _file(leaf / "TOAN8_B1_T2_1.txt")
+
+    result = discover_folder_jobs(tmp_path)
+
+    assert result.jobs == ()
+    assert [issue.message for issue in result.issues] == [
+        "TOAN8_B1_T2_1: missing PPTX"
+    ]
+
+
 def test_queues_new_outputs_skips_existing_or_queued_and_deletes_stale_report(
     tmp_path: Path,
 ) -> None:

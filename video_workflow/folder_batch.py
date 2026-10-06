@@ -132,10 +132,9 @@ def discover_folder_jobs(root: Path) -> FolderScanResult:
         orphan_stems: dict[str, str] = {}
         for path in files:
             stem = path.stem
-            if path.suffix.casefold() in TIMELINE_EXTENSIONS and stem.casefold().startswith(
-                "timeline_slide_"
-            ):
-                stem = stem[len("timeline_slide_") :]
+            if path.suffix.casefold() in TIMELINE_EXTENSIONS:
+                if stem.casefold().startswith("timeline_slide_"):
+                    stem = stem[len("timeline_slide_") :]
             elif path.suffix.casefold() not in MEDIA_EXTENSIONS:
                 continue
             match = re.fullmatch(r"(.+)_([12])", stem)
