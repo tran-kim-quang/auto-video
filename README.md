@@ -32,6 +32,17 @@ Có thể chạy với console để xem lỗi khởi động:
 .venv\Scripts\python.exe -m video_workflow.ui
 ```
 
+Để build bản portable cho Windows, chạy sau khi `setup.bat` hoàn tất:
+
+```bat
+build-windows.bat
+```
+
+Kết quả nằm tại `dist\PyramidVideoWorkflow\PyramidVideoWorkflow.exe`. Phân
+phối nguyên thư mục `PyramidVideoWorkflow`; máy chạy vẫn cần Microsoft
+PowerPoint và FFmpeg trên `PATH`. Queue và settings của bản đóng gói được lưu
+trong `.workflow_data` cạnh file EXE.
+
 ### Ubuntu Linux
 
 Hỗ trợ Ubuntu Desktop 24.04/26.04 LTS với Python 3.12 trở lên. Script cài Python/Tkinter, FFmpeg, LibreOffice Impress headless, Poppler (`pdftocairo`) và các font fallback Liberation/Noto:
@@ -58,13 +69,43 @@ Trên Linux, LibreOffice chuyển PPTX thành PDF và Poppler tạo ảnh slide.
 
 Trong phần **Global assets**, logo và outro đều tùy chọn độc lập: có thể chọn một trong hai, cả hai hoặc để trống cả hai rồi bấm **Save assets**. Đường dẫn được lưu trong `.workflow_data/settings.json`. Mỗi job chọn video hoặc audio nguồn, PPTX, timeline TXT, tên output và thư mục output. Job đầu tiên tự chạy, các job sau chờ tuần tự.
 
+### Batch folder theo cấu trúc slide
+
+Tab **Batch folder** nhận một thư mục gốc rồi quét đệ quy các folder lá. Mỗi
+PPTX được ghép với part 1 hoặc part 2 theo đúng tên gốc, ví dụ:
+
+```text
+Bài 1_Đơn thức/
+  TOAN8_B1_T1.pptx
+  TOAN8_B1_T1_1.mp4
+  timeline_slide_TOAN8_B1_T1_1.txt
+  TOAN8_B1_T1_2.wav
+  timeline_slide_TOAN8_B1_T1_2.json
+```
+
+Media hỗ trợ các đuôi `.mp4`, `.mov`, `.mkv`, `.mp3`, `.wav`, `.m4a` và
+`.aac`; timeline hỗ trợ `.txt` hoặc `.json`. Có part nào thì dựng part đó,
+không bắt buộc phải có cả hai. Kết quả nằm ngay trong folder lá:
+
+```text
+Bài 1_Đơn thức/output/
+  TOAN8_B1_T1_1.mp4
+  TOAN8_B1_T1_2.mp4
+```
+
+Thư mục `output` không bị quét lại. Output đã tồn tại hoặc đã có trong queue
+được bỏ qua và không bị ghi đè. Batch này không tạo file `*.report.json`; nếu
+gặp report cũ đi kèm một output đã hoàn thành, ứng dụng xóa report đó. Bộ file
+thiếu hoặc trùng media/timeline được báo theo từng folder, còn các bộ hợp lệ
+khác vẫn được thêm vào queue tuần tự.
+
 Tab **Merge 2 videos** tạo job ghép theo thứ tự **Video 1 → Video 2**. Hai video được chuẩn hóa độc lập về 1280×720, 24 fps, H.264/AAC trước khi ghép; video dọc được giữ trọn khung với viền đen và video không có audio được thêm silence. Logo và outro toàn cục không áp dụng cho loại job này.
 
 Cả job dựng slide và job ghép video dùng chung một queue FIFO. Cột **Type** cho biết job là `slide` hay `merge`; các thao tác **Retry**, **Remove waiting** và **Open output folder** dùng chung cho cả hai loại.
 
 Trình chọn file/thư mục tự quét lại nội dung đang hiển thị, còn các ô đường dẫn và cột **Files** trong queue cập nhật trạng thái filesystem mỗi giây. Nếu một job lỗi chỉ vì file đầu vào tạm thời biến mất, ứng dụng tự đưa job về cuối queue khi file xuất hiện lại đúng đường dẫn.
 
-Queue và lịch sử nằm trong `.workflow_data/jobs.json`. Job đang chạy khi ứng dụng đóng sẽ thành `interrupted` và có thể **Retry**. Chi tiết lỗi nằm trong `.workflow_data/logs`. Ứng dụng chỉ lưu đường dẫn đầu vào; nếu file bị di chuyển, job sẽ lỗi và cần chọn lại đúng file. Output có sẵn không bị ghi đè. Mỗi output ghép thành công cũng có file `<output>.report.json` chứa hai đường dẫn đầu vào và thời lượng từng phần.
+Queue và lịch sử nằm trong `.workflow_data/jobs.json`. Job đang chạy khi ứng dụng đóng sẽ thành `interrupted` và có thể **Retry**. Chi tiết lỗi nằm trong `.workflow_data/logs`. Ứng dụng chỉ lưu đường dẫn đầu vào; nếu file bị di chuyển, job sẽ lỗi và cần chọn lại đúng file. Output có sẵn không bị ghi đè. Job đơn lẻ và output ghép vẫn tạo `<output>.report.json`; riêng job được thêm từ tab **Batch folder** chỉ xuất MP4 cuối.
 
 ## Yêu cầu
 

@@ -189,6 +189,41 @@ def test_success_publishes_verified_video_and_report(tmp_path: Path, monkeypatch
     ]
 
 
+def test_success_can_publish_only_video_and_removes_stale_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = replace(_request(tmp_path), outro=None, write_report=False)
+    report_path = Path(f"{request.output}.report.json")
+    report_path.write_text("stale", encoding="utf-8")
+    monkeypatch.setattr("video_workflow.pipeline.count_pptx_slides", lambda _: 20)
+    monkeypatch.setattr(
+        "video_workflow.pipeline.probe_media",
+        lambda path: (
+            _media(584_400)
+            if Path(path) == request.source_media
+            else _media(580_791)
+        ),
+    )
+
+    def fake_export(_pptx, slide_ids, target, **_kwargs):
+        Path(target).mkdir(parents=True, exist_ok=True)
+        return {
+            slide_id: Path(target) / f"slide_{slide_id:03d}.png"
+            for slide_id in set(slide_ids)
+        }
+
+    monkeypatch.setattr("video_workflow.pipeline.export_slides", fake_export)
+    monkeypatch.setattr(
+        "video_workflow.pipeline.render_lecture",
+        lambda *args, **_kwargs: Path(args[4]).write_bytes(b"video"),
+    )
+
+    build_video(request)
+
+    assert request.output.read_bytes() == b"video"
+    assert not report_path.exists()
+
+
 def test_cli_accepts_all_five_inputs_and_unicode_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     output = tmp_path / "kết quả có dấu.mp4"
     captured: list[BuildRequest] = []

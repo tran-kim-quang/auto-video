@@ -154,3 +154,22 @@ def test_legacy_job_without_kind_loads_as_slide_job(tmp_path: Path) -> None:
 
     assert loaded.kind.value == "slide"
     assert loaded.secondary_media is None
+
+
+def test_slide_job_round_trips_disabled_report_and_legacy_defaults_to_enabled(
+    tmp_path: Path,
+) -> None:
+    job = JobRecord.new(
+        source_media=tmp_path / "source.mp4",
+        pptx=tmp_path / "slides.pptx",
+        timeline=tmp_path / "timeline.txt",
+        output_name="lesson_1",
+        output_directory=tmp_path / "output",
+        write_report=False,
+    )
+
+    payload = job.to_dict()
+    assert JobRecord.from_dict(payload).write_report is False
+
+    payload.pop("write_report")
+    assert JobRecord.from_dict(payload).write_report is True

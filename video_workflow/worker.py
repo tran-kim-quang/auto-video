@@ -143,6 +143,7 @@ class QueueWorker:
                             logo=settings.logo,
                             outro=settings.outro,
                             output=job.output_path,
+                            write_report=job.write_report,
                         )
                         builder = self.build
                     builder(

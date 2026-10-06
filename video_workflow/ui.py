@@ -9,11 +9,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from tkinter import messagebox, ttk
 
+from .folder_batch import queue_folder_jobs
 from .job_models import JobKind, JobRecord, JobStatus
 from .json_store import JsonStore
 from .live_path_dialog import LivePathDialog
 from .queue_controller import QueueController, QueueStateError
 from .worker import QueueWorker
+
+
+def application_data_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / ".workflow_data"
+    return Path(__file__).resolve().parents[1] / ".workflow_data"
 
 
 def _open_directory(path: Path) -> None:
@@ -124,6 +131,7 @@ class WorkflowApp:
         self.timeline_var = tk.StringVar()
         self.output_name_var = tk.StringVar()
         self.output_directory_var = tk.StringVar()
+        self.batch_root_var = tk.StringVar()
         self.first_video_var = tk.StringVar()
         self.second_video_var = tk.StringVar()
         self.merge_output_name_var = tk.StringVar()
@@ -201,7 +209,9 @@ class WorkflowApp:
         job_tabs.add(form, text="Build slide video")
         self._path_row(form, 0, "Video or audio", self.source_var, self.choose_source)
         self._path_row(form, 1, "PPTX", self.pptx_var, self.choose_pptx)
-        self._path_row(form, 2, "Timeline TXT", self.timeline_var, self.choose_timeline)
+        self._path_row(
+            form, 2, "Timeline TXT/JSON", self.timeline_var, self.choose_timeline
+        )
         ttk.Label(form, text="Output name").grid(row=3, column=0, sticky="w", pady=3)
         ttk.Entry(form, textvariable=self.output_name_var).grid(
             row=3, column=1, sticky="ew", pady=3
@@ -216,6 +226,29 @@ class WorkflowApp:
         )
         self.add_button = ttk.Button(form, text="Add to queue", command=self.submit_job)
         self.add_button.grid(row=5, column=3, sticky="e", pady=(8, 0))
+
+        batch_form = ttk.Frame(job_tabs, padding=10)
+        batch_form.columnconfigure(1, weight=1)
+        job_tabs.add(batch_form, text="Batch folder")
+        self._path_row(
+            batch_form,
+            0,
+            "Input root",
+            self.batch_root_var,
+            self.choose_batch_root,
+            kind="directory",
+        )
+        ttk.Label(
+            batch_form,
+            text=(
+                "Recursively scans leaf folders for BASE.pptx, BASE_1/2 media, "
+                "and timeline_slide_BASE_1/2.txt/json."
+            ),
+        ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(5, 0))
+        self.batch_button = ttk.Button(
+            batch_form, text="Scan and add to queue", command=self.submit_batch_folder
+        )
+        self.batch_button.grid(row=2, column=3, sticky="e", pady=(8, 0))
 
         merge_form = ttk.Frame(job_tabs, padding=10)
         merge_form.columnconfigure(1, weight=1)
@@ -304,6 +337,9 @@ class WorkflowApp:
     def show_error(self, message: str) -> None:
         messagebox.showerror("Video workflow", message, parent=self.root)
 
+    def show_warning(self, message: str) -> None:
+        messagebox.showwarning("Batch folder", message, parent=self.root)
+
     def _initial_directory(self, variable: tk.StringVar) -> Path:
         raw = variable.get().strip()
         if raw:
@@ -362,10 +398,13 @@ class WorkflowApp:
         self._choose_file(self.pptx_var, [("PowerPoint", "*.pptx")])
 
     def choose_timeline(self) -> None:
-        self._choose_file(self.timeline_var, [("Timeline", "*.txt")])
+        self._choose_file(self.timeline_var, [("Timeline", "*.txt *.json")])
 
     def choose_output_directory(self) -> None:
         self._choose_directory(self.output_directory_var)
+
+    def choose_batch_root(self) -> None:
+        self._choose_directory(self.batch_root_var)
 
     def choose_first_video(self) -> None:
         self._choose_file(
@@ -440,6 +479,31 @@ class WorkflowApp:
         self.merge_output_name_var.set("")
         self.refresh_jobs()
         self.worker.wake()
+
+    def submit_batch_folder(self) -> None:
+        raw_root = self.batch_root_var.get().strip()
+        if not raw_root:
+            self.show_error("input root is required")
+            return
+        try:
+            result = queue_folder_jobs(self.controller, Path(raw_root))
+        except OSError as exc:
+            self.show_error(str(exc))
+            return
+
+        if result.issues:
+            visible = result.issues[:20]
+            lines = [f"{issue.folder}: {issue.message}" for issue in visible]
+            if len(result.issues) > len(visible):
+                lines.append(f"... and {len(result.issues) - len(visible)} more issue(s)")
+            self.show_warning("\n".join(lines))
+        self.status_var.set(
+            f"Batch: {len(result.queued)} added, {len(result.skipped)} skipped, "
+            f"{len(result.issues)} issue(s)"
+        )
+        self.refresh_jobs()
+        if result.queued:
+            self.worker.wake()
 
     def refresh_jobs(self) -> None:
         if not hasattr(self, "tree"):
@@ -608,6 +672,8 @@ class WorkflowApp:
             self.add_button.configure(state="disabled")
         if hasattr(self, "merge_button"):
             self.merge_button.configure(state="disabled")
+        if hasattr(self, "batch_button"):
+            self.batch_button.configure(state="disabled")
         self.worker.stop(timeout=10)
         self._finish_close()
 
@@ -622,8 +688,7 @@ class WorkflowApp:
 
 def main() -> int:
     root = tk.Tk()
-    data_root = Path(__file__).resolve().parents[1] / ".workflow_data"
-    store = JsonStore(data_root)
+    store = JsonStore(application_data_root())
     controller = QueueController(store)
     controller.recover_startup()
     worker = QueueWorker(controller)

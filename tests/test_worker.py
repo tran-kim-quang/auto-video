@@ -177,6 +177,32 @@ def test_worker_builds_job_without_global_assets(tmp_path: Path) -> None:
     assert requests[0].outro is None
 
 
+def test_worker_passes_batch_report_setting_to_slide_builder(tmp_path: Path) -> None:
+    controller = _controller(tmp_path, 0)
+    controller.enqueue(
+        source_media=tmp_path / "source.mp3",
+        pptx=tmp_path / "slides.pptx",
+        timeline=tmp_path / "timeline.txt",
+        output_name="lesson_1",
+        output_directory=tmp_path / "output",
+        write_report=False,
+    )
+    requests = []
+    worker = QueueWorker(
+        controller, build=lambda request, **_kwargs: requests.append(request)
+    )
+
+    worker.start()
+    try:
+        _wait_until(
+            lambda: controller.jobs()[0].status is JobStatus.COMPLETED, timeout=0.3
+        )
+    finally:
+        worker.stop(timeout=1)
+
+    assert requests[0].write_report is False
+
+
 def test_stop_cancels_build_marks_interrupted_and_balances_com(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

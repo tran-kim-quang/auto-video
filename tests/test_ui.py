@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 from video_workflow.job_models import GlobalSettings
+from video_workflow.json_store import JsonStore
+from video_workflow.queue_controller import QueueController
 from video_workflow import ui as ui_module
 from video_workflow.ui import JobFormData, WorkflowApp, _open_directory
 from video_workflow.worker import WorkerEvent
@@ -227,3 +229,35 @@ def test_submit_merge_enqueues_and_wakes_worker(tmp_path: Path) -> None:
     ]
     assert app.merge_output_name_var.get() == ""
     assert app.worker.wakes == 1
+
+
+def test_submit_batch_folder_queues_pdf_style_jobs_without_reports(
+    tmp_path: Path,
+) -> None:
+    leaf = tmp_path / "Toan8" / "Bài 1_Đơn thức"
+    leaf.mkdir(parents=True)
+    for name in (
+        "TOAN8_B1_T1.pptx",
+        "TOAN8_B1_T1_1.mp4",
+        "timeline_slide_TOAN8_B1_T1_1.txt",
+    ):
+        (leaf / name).write_bytes(b"input")
+    app = WorkflowApp.__new__(WorkflowApp)
+    app.controller = QueueController(JsonStore(tmp_path / "data"))
+    app.worker = _Worker()
+    app.batch_root_var = _Var(str(tmp_path / "Toan8"))
+    app.status_var = _Var()
+    app.refresh_jobs = lambda: None
+    app._warnings = []
+    app.show_warning = lambda message: app._warnings.append(message)
+    app._errors = []
+    app.show_error = lambda message: app._errors.append(message)
+
+    app.submit_batch_folder()
+
+    jobs = app.controller.jobs()
+    assert len(jobs) == 1
+    assert jobs[0].output_path == leaf / "output" / "TOAN8_B1_T1_1.mp4"
+    assert jobs[0].write_report is False
+    assert app.worker.wakes == 1
+    assert app.status_var.get() == "Batch: 1 added, 0 skipped, 0 issue(s)"

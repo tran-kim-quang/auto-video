@@ -76,6 +76,7 @@ class QueueController:
         timeline: Path,
         output_name: str,
         output_directory: Path,
+        write_report: bool = True,
     ) -> JobRecord:
         job = JobRecord.new(
             source_media=source_media,
@@ -83,6 +84,7 @@ class QueueController:
             timeline=timeline,
             output_name=output_name,
             output_directory=output_directory,
+            write_report=write_report,
         )
         error = self._validate_job_paths(job)
         if error:

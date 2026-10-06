@@ -92,6 +92,7 @@ class JobRecord:
     output_directory: Path
     kind: JobKind = JobKind.SLIDE
     secondary_media: Path | None = None
+    write_report: bool = True
     status: JobStatus = JobStatus.WAITING
     stage: JobStage | None = None
     error: str | None = None
@@ -107,6 +108,7 @@ class JobRecord:
         timeline: Path,
         output_name: str,
         output_directory: Path,
+        write_report: bool = True,
         status: JobStatus = JobStatus.WAITING,
     ) -> JobRecord:
         return cls(
@@ -117,6 +119,7 @@ class JobRecord:
             timeline=Path(timeline),
             output_name=validate_output_name(output_name),
             output_directory=Path(output_directory),
+            write_report=write_report,
             status=status,
         )
 
@@ -160,6 +163,7 @@ class JobRecord:
             "timeline": str(self.timeline) if self.timeline is not None else None,
             "output_name": self.output_name,
             "output_directory": str(self.output_directory),
+            "write_report": self.write_report,
             "status": self.status.value,
             "stage": self.stage.value if self.stage else None,
             "error": self.error,
@@ -181,6 +185,7 @@ class JobRecord:
             secondary_media=(
                 Path(data["secondary_media"]) if data.get("secondary_media") else None
             ),
+            write_report=bool(data.get("write_report", True)),
             status=JobStatus(data["status"]),
             stage=JobStage(data["stage"]) if data.get("stage") else None,
             error=data.get("error"),

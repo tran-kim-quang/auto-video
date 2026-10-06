@@ -14,6 +14,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=9"]
+build = ["pyinstaller>=6.16"]
 
 [project.scripts]
 build-video = "video_workflow.cli:main"
