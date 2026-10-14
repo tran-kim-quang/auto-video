@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from .voicestudio_client import VoiceStudioConfig
+
 
 class JobStatus(StrEnum):
     WAITING = "waiting"
@@ -16,20 +18,18 @@ class JobStatus(StrEnum):
     INTERRUPTED = "interrupted"
 
 
-class JobKind(StrEnum):
-    SLIDE = "slide"
-    MERGE = "merge"
-
-
 class JobStage(StrEnum):
     VALIDATING = "validating"
+    STARTING_VOICESTUDIO = "starting_voicestudio"
+    VALIDATING_PROFILE = "validating_profile"
+    SYNTHESIZING_AUDIO = "synthesizing_audio"
+    ASSEMBLING_NARRATION = "assembling_narration"
     EXPORTING_SLIDES = "exporting_slides"
     RENDERING_LECTURE = "rendering_lecture"
     PREPARING_OUTRO = "preparing_outro"
-    NORMALIZING_FIRST = "normalizing_first"
-    NORMALIZING_SECOND = "normalizing_second"
     JOINING = "joining"
     VERIFYING = "verifying"
+    PUBLISHING = "publishing"
 
 
 _RESERVED_NAMES = {
@@ -56,7 +56,7 @@ def validate_output_name(name: str) -> str:
     return result
 
 
-def _now() -> str:
+def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
@@ -64,40 +64,70 @@ def _now() -> str:
 class GlobalSettings:
     logo: Path | None = None
     outro: Path | None = None
+    voicestudio_api_url: str = "http://127.0.0.1:3900"
+    profile_id: str = "599fc048"
+    backend_override: Path | None = None
+    inference_config_version: str = "tts-v1"
+
+    def voice_config(self) -> VoiceStudioConfig:
+        return VoiceStudioConfig(
+            api_url=self.voicestudio_api_url,
+            profile_id=self.profile_id,
+            config_version=self.inference_config_version,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "logo": str(self.logo) if self.logo is not None else None,
             "outro": str(self.outro) if self.outro is not None else None,
+            "voicestudio_api_url": self.voicestudio_api_url,
+            "profile_id": self.profile_id,
+            "backend_override": (
+                str(self.backend_override) if self.backend_override is not None else None
+            ),
+            "inference_config_version": self.inference_config_version,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> GlobalSettings:
-        if data.get("schema_version") != 1:
+        if data.get("schema_version") != 2:
             raise ValueError("unsupported settings schema_version")
-        logo = data.get("logo")
-        outro = data.get("outro")
-        return cls(Path(logo) if logo else None, Path(outro) if outro else None)
+        return cls(
+            logo=Path(data["logo"]) if data.get("logo") else None,
+            outro=Path(data["outro"]) if data.get("outro") else None,
+            voicestudio_api_url=str(
+                data.get("voicestudio_api_url", "http://127.0.0.1:3900")
+            ),
+            profile_id=str(data.get("profile_id", "599fc048")),
+            backend_override=(
+                Path(data["backend_override"]) if data.get("backend_override") else None
+            ),
+            inference_config_version=str(
+                data.get("inference_config_version", "tts-v1")
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)
 class JobRecord:
     id: str
     created_at: str
-    source_media: Path
-    pptx: Path | None
-    timeline: Path | None
+    pptx: Path
+    script: Path
+    artifact_directory: Path
     output_name: str
-    output_directory: Path
-    kind: JobKind = JobKind.SLIDE
-    secondary_media: Path | None = None
-    write_report: bool = True
-    use_outro: bool = True
-    overwrite_output: bool = False
-    dependency_job_ids: tuple[str, ...] = ()
+    logo: Path
+    outro: Path
+    voicestudio_api_url: str
+    profile_id: str
+    backend_override: Path | None
+    inference_config_version: str
+    input_signature: dict[str, Any]
     status: JobStatus = JobStatus.WAITING
     stage: JobStage | None = None
+    progress_current: int = 0
+    progress_total: int = 0
     error: str | None = None
     started_at: str | None = None
     finished_at: str | None = None
@@ -106,84 +136,70 @@ class JobRecord:
     def new(
         cls,
         *,
-        source_media: Path,
         pptx: Path,
-        timeline: Path,
+        script: Path,
+        artifact_directory: Path,
         output_name: str,
-        output_directory: Path,
-        write_report: bool = True,
-        use_outro: bool = True,
-        overwrite_output: bool = False,
-        dependency_job_ids: tuple[str, ...] = (),
+        logo: Path,
+        outro: Path,
+        voicestudio_api_url: str,
+        profile_id: str,
+        backend_override: Path | None,
+        inference_config_version: str,
+        input_signature: dict[str, Any],
         status: JobStatus = JobStatus.WAITING,
     ) -> JobRecord:
         return cls(
             id=str(uuid4()),
-            created_at=_now(),
-            source_media=Path(source_media),
+            created_at=utc_now(),
             pptx=Path(pptx),
-            timeline=Path(timeline),
+            script=Path(script),
+            artifact_directory=Path(artifact_directory),
             output_name=validate_output_name(output_name),
-            output_directory=Path(output_directory),
-            write_report=write_report,
-            use_outro=use_outro,
-            overwrite_output=overwrite_output,
-            dependency_job_ids=tuple(str(item) for item in dependency_job_ids),
-            status=status,
-        )
-
-    @classmethod
-    def new_merge(
-        cls,
-        *,
-        first_video: Path,
-        second_video: Path,
-        output_name: str,
-        output_directory: Path,
-        write_report: bool = True,
-        overwrite_output: bool = False,
-        dependency_job_ids: tuple[str, ...] = (),
-        status: JobStatus = JobStatus.WAITING,
-    ) -> JobRecord:
-        return cls(
-            id=str(uuid4()),
-            created_at=_now(),
-            source_media=Path(first_video),
-            pptx=None,
-            timeline=None,
-            output_name=validate_output_name(output_name),
-            output_directory=Path(output_directory),
-            kind=JobKind.MERGE,
-            secondary_media=Path(second_video),
-            write_report=write_report,
-            overwrite_output=overwrite_output,
-            dependency_job_ids=tuple(str(item) for item in dependency_job_ids),
+            logo=Path(logo),
+            outro=Path(outro),
+            voicestudio_api_url=voicestudio_api_url,
+            profile_id=profile_id,
+            backend_override=(
+                Path(backend_override) if backend_override is not None else None
+            ),
+            inference_config_version=inference_config_version,
+            input_signature=input_signature,
             status=status,
         )
 
     @property
     def output_path(self) -> Path:
-        return self.output_directory / self.output_name
+        return self.artifact_directory / self.output_name
+
+    def voice_config(self) -> VoiceStudioConfig:
+        return VoiceStudioConfig(
+            api_url=self.voicestudio_api_url,
+            profile_id=self.profile_id,
+            config_version=self.inference_config_version,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "created_at": self.created_at,
-            "kind": self.kind.value,
-            "source_media": str(self.source_media),
-            "secondary_media": (
-                str(self.secondary_media) if self.secondary_media is not None else None
-            ),
-            "pptx": str(self.pptx) if self.pptx is not None else None,
-            "timeline": str(self.timeline) if self.timeline is not None else None,
+            "pptx": str(self.pptx),
+            "script": str(self.script),
+            "artifact_directory": str(self.artifact_directory),
             "output_name": self.output_name,
-            "output_directory": str(self.output_directory),
-            "write_report": self.write_report,
-            "use_outro": self.use_outro,
-            "overwrite_output": self.overwrite_output,
-            "dependency_job_ids": list(self.dependency_job_ids),
+            "logo": str(self.logo),
+            "outro": str(self.outro),
+            "voicestudio_api_url": self.voicestudio_api_url,
+            "profile_id": self.profile_id,
+            "backend_override": (
+                str(self.backend_override) if self.backend_override is not None else None
+            ),
+            "inference_config_version": self.inference_config_version,
+            "input_signature": self.input_signature,
             "status": self.status.value,
-            "stage": self.stage.value if self.stage else None,
+            "stage": self.stage.value if self.stage is not None else None,
+            "progress_current": self.progress_current,
+            "progress_total": self.progress_total,
             "error": self.error,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
@@ -191,45 +207,33 @@ class JobRecord:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> JobRecord:
-        output_name = validate_output_name(str(data["output_name"]))
-        if "use_outro" in data:
-            use_outro = bool(data["use_outro"])
-        else:
-            is_existing_batch_part1 = (
-                data.get("write_report") is False
-                and Path(output_name).stem.casefold().endswith("_1")
-            )
-            use_outro = not is_existing_batch_part1
-        overwrite_output = (
-            bool(data["overwrite_output"])
-            if "overwrite_output" in data
-            else data.get("write_report") is False
-        )
         return cls(
             id=str(data["id"]),
             created_at=str(data["created_at"]),
-            source_media=Path(data["source_media"]),
-            pptx=Path(data["pptx"]) if data.get("pptx") else None,
-            timeline=Path(data["timeline"]) if data.get("timeline") else None,
-            output_name=output_name,
-            output_directory=Path(data["output_directory"]),
-            kind=JobKind(data.get("kind", JobKind.SLIDE)),
-            secondary_media=(
-                Path(data["secondary_media"]) if data.get("secondary_media") else None
+            pptx=Path(data["pptx"]),
+            script=Path(data["script"]),
+            artifact_directory=Path(data["artifact_directory"]),
+            output_name=validate_output_name(str(data["output_name"])),
+            logo=Path(data["logo"]),
+            outro=Path(data["outro"]),
+            voicestudio_api_url=str(data["voicestudio_api_url"]),
+            profile_id=str(data["profile_id"]),
+            backend_override=(
+                Path(data["backend_override"]) if data.get("backend_override") else None
             ),
-            write_report=bool(data.get("write_report", True)),
-            use_outro=use_outro,
-            overwrite_output=overwrite_output,
-            dependency_job_ids=tuple(
-                str(item) for item in data.get("dependency_job_ids", ())
-            ),
+            inference_config_version=str(data["inference_config_version"]),
+            input_signature=dict(data["input_signature"]),
             status=JobStatus(data["status"]),
             stage=JobStage(data["stage"]) if data.get("stage") else None,
-            error=data.get("error"),
-            started_at=data.get("started_at"),
-            finished_at=data.get("finished_at"),
+            progress_current=int(data.get("progress_current", 0)),
+            progress_total=int(data.get("progress_total", 0)),
+            error=str(data["error"]) if data.get("error") is not None else None,
+            started_at=(
+                str(data["started_at"]) if data.get("started_at") is not None else None
+            ),
+            finished_at=(
+                str(data["finished_at"])
+                if data.get("finished_at") is not None
+                else None
+            ),
         )
-
-
-def utc_now() -> str:
-    return _now()

@@ -17,8 +17,6 @@ dev = ["pytest>=9"]
 build = ["pyinstaller>=6.16"]
 
 [project.scripts]
-build-video = "video_workflow.cli:main"
-build-video-batch = "video_workflow.batch_cli:main"
 video-workflow-ui = "video_workflow.ui:main"
 
 [tool.pytest.ini_options]

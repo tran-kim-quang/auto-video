@@ -6,6 +6,9 @@ from pathlib import Path
 from scripts import repair_windows_tkinter
 
 
+ROOT = Path(__file__).parents[1]
+
+
 def test_tkinter_repair_installs_tcltk_and_verifies_python_launcher(
     monkeypatch,
 ) -> None:
@@ -71,3 +74,12 @@ def test_tkinter_repair_finds_launcher_installed_outside_current_path(
 
     assert repair_windows_tkinter.main() == 0
     assert calls[-1][0] == str(launcher)
+
+
+def test_windows_setup_checks_voicestudio_without_installing_it() -> None:
+    source = (ROOT / "scripts" / "setup.ps1").read_text(encoding="utf-8")
+
+    assert 'Report-Check "VoiceStudio"' in source
+    assert "VoiceStudio/voicestudio-electron" not in source
+    assert "winget" in source
+    assert "VoiceStudio.VoiceStudio" not in source

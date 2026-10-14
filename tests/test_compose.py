@@ -238,7 +238,16 @@ def test_render_lecture_accepts_audio_only_source(tmp_path: Path, suffix: str) -
     source = tmp_path / f"source{suffix}"
     _make_audio_only(source)
     output = tmp_path / "lecture.mp4"
-    render_lecture({1: slide}, (FrameSpan(1, 0, 24),), source, logo, output, fps=24, logo_width_ratio=.01, margin_px=0)
+    render_lecture(
+        slides={1: slide},
+        spans=(FrameSpan(1, 0, 24),),
+        narration_audio=source,
+        logo=logo,
+        target=output,
+        fps=24,
+        logo_width_ratio=.01,
+        margin_px=0,
+    )
     info = probe_media(output)
     assert info.has_audio and info.audio_codec == "aac"
     assert info.duration_ms == pytest.approx(1000, abs=45)

@@ -23,6 +23,8 @@ class MediaInfo:
     has_audio: bool
     video_codec: str | None = None
     audio_codec: str | None = None
+    sample_rate: int | None = None
+    channels: int | None = None
 
 
 def _milliseconds(value: Any) -> int | None:
@@ -56,7 +58,7 @@ def probe_media(path: Path) -> MediaInfo:
         "-v",
         "error",
         "-show_entries",
-        "format=duration:stream=index,codec_type,codec_name,width,height,avg_frame_rate,duration",
+        "format=duration:stream=index,codec_type,codec_name,width,height,avg_frame_rate,duration,sample_rate,channels",
         "-of",
         "json",
         str(path.resolve()),
@@ -96,4 +98,14 @@ def probe_media(path: Path) -> MediaInfo:
         has_audio=audio is not None,
         video_codec=str(video.get("codec_name")) if video and video.get("codec_name") else None,
         audio_codec=str(audio.get("codec_name")) if audio and audio.get("codec_name") else None,
+        sample_rate=(
+            int(audio["sample_rate"])
+            if audio and audio.get("sample_rate") not in (None, "")
+            else None
+        ),
+        channels=(
+            int(audio["channels"])
+            if audio and audio.get("channels") is not None
+            else None
+        ),
     )

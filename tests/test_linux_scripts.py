@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import stat
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -44,3 +45,42 @@ def test_run_ui_without_venv_has_clear_error(tmp_path: Path) -> None:
     result = subprocess.run([str(script)], capture_output=True, text=True)
     assert result.returncode == 1
     assert "Run ./setup.sh first" in result.stderr
+
+
+def test_pyproject_exposes_only_desktop_workflow_entrypoint() -> None:
+    payload = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert payload["project"]["scripts"] == {
+        "video-workflow-ui": "video_workflow.ui:main"
+    }
+
+
+def test_linux_setup_checks_voicestudio_without_installing_it(tmp_path: Path) -> None:
+    fake_home = tmp_path / "home"
+    backend = fake_home / ".config/VoiceStudio/runtime/project/backend/main.py"
+    backend.parent.mkdir(parents=True)
+    backend.write_text("# installed", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    sentinel = tmp_path / "installer-called"
+    for name in ("sudo", "apt-get", "curl", "wget"):
+        command = fake_bin / name
+        command.write_text(
+            f"#!/bin/sh\ntouch '{sentinel}'\nexit 99\n", encoding="utf-8"
+        )
+        command.chmod(0o755)
+    env = os.environ | {
+        "HOME": str(fake_home),
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+    }
+
+    result = subprocess.run(
+        ["bash", str(ROOT / "setup.sh"), "--check-only"],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "VoiceStudio" in result.stdout
+    assert str(backend) in result.stdout
+    assert not sentinel.exists()

@@ -52,6 +52,26 @@ function Invoke-Python([string]$PythonSpec, [string[]]$Arguments) {
     return [int]$LASTEXITCODE
 }
 
+function Find-VoiceStudio {
+    $candidates = @()
+    if (-not [string]::IsNullOrWhiteSpace($env:VOICESTUDIO_BACKEND)) {
+        $candidates += $env:VOICESTUDIO_BACKEND
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) {
+        $candidates += (Join-Path $env:APPDATA "VoiceStudio\runtime\project\backend\main.py")
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        $candidates += (Join-Path $env:LOCALAPPDATA "Programs\VoiceStudio\VoiceStudio.exe")
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
+        $candidates += (Join-Path $env:ProgramFiles "VoiceStudio\VoiceStudio.exe")
+    }
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    }
+    return $null
+}
+
 Set-Location -LiteralPath $RepoRoot
 if ($CheckOnly -and (Test-Path -LiteralPath $VenvPython)) {
     $PythonSpec = $VenvPython
@@ -136,6 +156,13 @@ if ($win32Exit -eq 0) {
     Report-Check "PowerPoint" ($powerPointExit -eq 0) "PowerPoint COM instance"
 } else {
     Report-Check "PowerPoint" $false "pywin32 is unavailable"
+}
+
+$voiceStudio = Find-VoiceStudio
+if ($null -ne $voiceStudio) {
+    Report-Check "VoiceStudio" $true "$voiceStudio (API http://127.0.0.1:3900)"
+} else {
+    Report-Check "VoiceStudio" $false "Install VoiceStudio or set VOICESTUDIO_BACKEND; setup never installs it."
 }
 
 if (-not $AllPassed) {

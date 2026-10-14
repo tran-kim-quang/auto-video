@@ -29,6 +29,14 @@ def test_windows_build_command_creates_portable_windowed_distribution(
     assert command[command.index("--name") + 1] == "PyramidVideoWorkflow"
     assert command[command.index("--distpath") + 1] == str(tmp_path / "dist")
     assert command[-1] == str(tmp_path / "windows_launcher.py")
+    hidden = [
+        command[index + 1]
+        for index, value in enumerate(command[:-1])
+        if value == "--hidden-import"
+    ]
+    assert "video_workflow.narration" in hidden
+    assert "video_workflow.voicestudio_client" in hidden
+    assert "video_workflow.voicestudio_supervisor" in hidden
 
 
 def test_windows_build_prepares_spec_directory_before_running_pyinstaller(
