@@ -1,478 +1,384 @@
 from __future__ import annotations
 
 import json
-import threading
+import os
 from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
 
 import pytest
 
-from video_workflow.cli import main
+from video_workflow import pipeline
+from video_workflow.narration import AudioArtifact, NarrationCancelled, NarrationResult
 from video_workflow.pipeline import (
-    BuildRequest,
+    NarratedBuildRequest,
     WorkflowCancelled,
     WorkflowError,
     _verify_final,
-    build_video,
+    build_narrated_video,
 )
 from video_workflow.probe import MediaInfo
-
-
-ROOT = Path(__file__).parents[1]
-FIXTURES = ROOT / "test"
-
-
-def _request(tmp_path: Path) -> BuildRequest:
-    return BuildRequest(
-        source_media=FIXTURES / "TOAN7_C4_B12_T36_2.mp4",
-        pptx=FIXTURES / "TOAN7_C4_B12_T36_2_fixed.pptx",
-        timeline=FIXTURES / "timeline_slide_TOAN7_C4_B12_T36_2.txt",
-        logo=FIXTURES / "logo.png",
-        outro=FIXTURES / "outro.mp4",
-        output=tmp_path / "final.mp4",
-    )
+from video_workflow.voicestudio_client import VoiceStudioConfig
 
 
 def _media(
     duration_ms: int,
     *,
-    width: int = 1280,
-    height: int = 720,
-    audio_duration_ms: int | None = None,
+    width: int | None = 1280,
+    height: int | None = 720,
     has_audio: bool = True,
 ) -> MediaInfo:
     return MediaInfo(
         duration_ms=duration_ms,
         width=width,
         height=height,
-        fps=Fraction(24),
-        audio_duration_ms=duration_ms if audio_duration_ms is None and has_audio else audio_duration_ms,
+        fps=Fraction(24) if width is not None else None,
+        audio_duration_ms=duration_ms if has_audio else None,
         has_audio=has_audio,
-        video_codec="h264",
-        audio_codec="aac" if has_audio else None,
+        video_codec="h264" if width is not None else None,
+        audio_codec="aac" if has_audio and width is not None else "pcm_s16le",
+        sample_rate=48_000 if has_audio else None,
+        channels=2 if has_audio else None,
     )
 
 
-def test_rejects_missing_input_before_media_work(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _request(tmp_path: Path) -> NarratedBuildRequest:
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    pptx = inputs / "Bài học.pptx"
+    script = inputs / "Bài học.txt"
+    logo = inputs / "logo.png"
+    outro = inputs / "outro.mp4"
+    pptx.write_bytes(b"pptx-v1")
+    script.write_text("Một. Slide 2: Hai.", encoding="utf-8")
+    logo.write_bytes(b"logo-v1")
+    outro.write_bytes(b"outro-v1")
+    return NarratedBuildRequest(
+        pptx=pptx,
+        script=script,
+        logo=logo,
+        outro=outro,
+        artifact_directory=tmp_path / "output" / "Bài học",
+        profile_config=VoiceStudioConfig(),
+    )
+
+
+def _fake_narration(artifact_directory: Path) -> NarrationResult:
+    artifact_directory = Path(artifact_directory)
+    audio = artifact_directory / "audio"
+    audio.mkdir(parents=True, exist_ok=True)
+    slides = []
+    cursor = 0
+    timeline = []
+    manifest_slides = []
+    for slide_id, text, duration in ((1, "Một.", 120), (2, "Hai.", 180)):
+        wav = audio / f"slide_{slide_id:03d}.wav"
+        wav.write_bytes(f"wav-{slide_id}".encode())
+        end = cursor + duration
+        timeline.append(
+            {
+                "slide_id": slide_id,
+                "start_ms": cursor,
+                "end_ms": end,
+                "duration_ms": duration,
+            }
+        )
+        manifest_slides.append(
+            {
+                "slide_id": slide_id,
+                "text": text,
+                "text_sha256": f"text-{slide_id}",
+                "wav": f"audio/{wav.name}",
+                "size": wav.stat().st_size,
+                "sample_rate": 16_000,
+                "channels": 1,
+                "duration_ms": duration,
+                "content_sha256": f"audio-{slide_id}",
+                "generation": {"audio_id": f"id-{slide_id}"},
+            }
+        )
+        slides.append(
+            AudioArtifact(
+                slide_id=slide_id,
+                text=text,
+                text_sha256=f"text-{slide_id}",
+                path=wav,
+                start_ms=cursor,
+                end_ms=end,
+                duration_ms=duration,
+                size=wav.stat().st_size,
+                sample_rate=16_000,
+                channels=1,
+                content_sha256=f"audio-{slide_id}",
+                generation_metadata={"audio_id": f"id-{slide_id}"},
+            )
+        )
+        cursor = end
+    timeline_path = artifact_directory / "timeline.json"
+    timeline_path.write_text(json.dumps(timeline), encoding="utf-8")
+    combined = artifact_directory / "combined.wav"
+    combined.write_bytes(b"combined")
+    manifest = artifact_directory / "audio-manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "config": {"profile_id": "599fc048", "steps": 32},
+                "slides": manifest_slides,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return NarrationResult(tuple(slides), timeline_path, combined, manifest, cursor)
+
+
+def _patch_success(monkeypatch, request: NarratedBuildRequest):
+    calls = {"narration": 0, "render": [], "normalize": 0, "join": 0}
+    monkeypatch.setattr(pipeline, "count_pptx_slides", lambda _path: 2)
+
+    def build_narration(_segments, _client, artifact, _cache, _config, **_kwargs):
+        calls["narration"] += 1
+        return _fake_narration(Path(artifact))
+
+    def export(_pptx, slide_ids, target, **_kwargs):
+        target = Path(target)
+        target.mkdir(parents=True, exist_ok=True)
+        result = {}
+        for slide_id in slide_ids:
+            image = target / f"slide_{slide_id:03d}.png"
+            image.write_bytes(f"png-{slide_id}".encode())
+            result[slide_id] = image
+        return result
+
+    def render(slides, spans, narration_audio, logo, target, **_kwargs):
+        calls["render"].append((narration_audio, logo, len(slides), len(spans)))
+        Path(target).write_bytes(b"lecture")
+
+    def normalize(_source, target, **_kwargs):
+        calls["normalize"] += 1
+        Path(target).write_bytes(b"normalized-outro")
+
+    def join(_lecture, _outro, target, **_kwargs):
+        calls["join"] += 1
+        Path(target).write_bytes(b"final-video")
+
+    def probe(path):
+        path = Path(path)
+        if path == request.outro:
+            return _media(500, width=720, height=1280)
+        return _media(800)
+
+    monkeypatch.setattr(pipeline, "build_narration", build_narration)
+    monkeypatch.setattr(pipeline, "export_slides", export)
+    monkeypatch.setattr(pipeline, "render_lecture", render)
+    monkeypatch.setattr(pipeline, "normalize_outro", normalize)
+    monkeypatch.setattr(pipeline, "join_parts", join)
+    monkeypatch.setattr(pipeline, "probe_media", probe)
+    return calls
+
+
+def _snapshot(root: Path) -> dict[str, bytes]:
+    return {
+        str(path.relative_to(root)): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+
+
+def test_build_publishes_complete_artifact_tree(tmp_path: Path, monkeypatch) -> None:
     request = _request(tmp_path)
-    request = replace(request, logo=tmp_path / "missing.png")
-    called = False
+    _patch_success(monkeypatch, request)
 
-    def unexpected_probe(_: Path) -> MediaInfo:
-        nonlocal called
-        called = True
-        raise AssertionError("probe should not run")
+    report = build_narrated_video(request, client=object(), cache_root=tmp_path / "cache")
 
-    monkeypatch.setattr("video_workflow.pipeline.probe_media", unexpected_probe)
+    root = request.artifact_directory
+    assert (root / "Bài học.mp4").read_bytes() == b"final-video"
+    assert (root / "report.json").is_file()
+    assert (root / "timeline.json").is_file()
+    assert (root / "combined.wav").is_file()
+    assert (root / "audio-manifest.json").is_file()
+    assert sorted(path.name for path in (root / "audio").iterdir()) == [
+        "slide_001.wav",
+        "slide_002.wav",
+    ]
+    assert sorted(path.name for path in (root / "slide-images").iterdir()) == [
+        "slide_001.png",
+        "slide_002.png",
+    ]
+    assert report.slide_count == 2
 
-    with pytest.raises(WorkflowError, match="logo.*does not exist"):
-        build_video(request)
 
-    assert called is False
-
-
-def test_rejects_short_source_audio_before_export(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_logo_is_on_lecture_and_outro_is_appended_exactly_once(
+    tmp_path: Path, monkeypatch
+) -> None:
     request = _request(tmp_path)
+    calls = _patch_success(monkeypatch, request)
+
+    build_narrated_video(request, client=object(), cache_root=tmp_path / "cache")
+
+    assert len(calls["render"]) == 1
+    narration_audio, logo, image_count, span_count = calls["render"][0]
+    assert Path(narration_audio).name == "combined.wav"
+    assert logo == request.logo
+    assert (image_count, span_count) == (2, 2)
+    assert calls["normalize"] == 1
+    assert calls["join"] == 1
+
+
+def test_report_contains_input_hashes_profile_settings_slide_times_and_checks(
+    tmp_path: Path, monkeypatch
+) -> None:
+    request = _request(tmp_path)
+    _patch_success(monkeypatch, request)
+
+    report = build_narrated_video(request, client=object(), cache_root=tmp_path / "cache")
+    payload = json.loads(
+        (request.artifact_directory / "report.json").read_text(encoding="utf-8")
+    )
+
+    assert payload["inputs"]["pptx"]["path"] == str(request.pptx.resolve())
+    assert len(payload["inputs"]["pptx"]["sha256"]) == 64
+    assert payload["profile_config"]["profile_id"] == "599fc048"
+    assert payload["profile_config"]["steps"] == 32
+    assert [(row["start_ms"], row["end_ms"]) for row in payload["slides"]] == [
+        (0, 120),
+        (120, 300),
+    ]
+    assert payload["total_narration_duration_ms"] == 300
+    assert payload["outro_duration_ms"] == 500
+    assert payload["expected_duration_ms"] == report.actual_duration_ms == 800
+    assert payload["checks"] == [
+        "video_1280x720",
+        "video_24fps",
+        "h264_aac_streams",
+        "duration",
+    ]
+
+
+def test_matching_signature_and_valid_artifacts_skip_all_build_steps(
+    tmp_path: Path, monkeypatch
+) -> None:
+    request = _request(tmp_path)
+    calls = _patch_success(monkeypatch, request)
+    first = build_narrated_video(request, client=object(), cache_root=tmp_path / "cache")
     monkeypatch.setattr(
-        "video_workflow.pipeline.probe_media",
-        lambda _: _media(1000, audio_duration_ms=1000),
+        pipeline,
+        "build_narration",
+        lambda *_args, **_kwargs: pytest.fail("matching completed output must be skipped"),
     )
-    monkeypatch.setattr("video_workflow.pipeline.count_pptx_slides", lambda _: 20)
-    exported = False
 
-    def unexpected_export(*args, **kwargs):
-        nonlocal exported
-        exported = True
-        raise AssertionError("export should not run")
+    second = build_narrated_video(request, client=object(), cache_root=tmp_path / "cache")
 
-    monkeypatch.setattr("video_workflow.pipeline.export_slides", unexpected_export)
-
-    with pytest.raises(WorkflowError, match="shorter"):
-        build_video(request)
-
-    assert exported is False
+    assert second.input_signature == first.input_signature
+    assert calls["narration"] == 1
 
 
-def test_existing_output_is_not_overwritten(tmp_path: Path) -> None:
+@pytest.mark.parametrize("missing", ["combined.wav", "audio/slide_002.wav"])
+def test_stale_or_missing_artifact_rebuilds(
+    tmp_path: Path, monkeypatch, missing: str
+) -> None:
     request = _request(tmp_path)
-    request.output.write_bytes(b"keep-me")
+    calls = _patch_success(monkeypatch, request)
+    build_narrated_video(request, client=object(), cache_root=tmp_path / "cache")
+    (request.artifact_directory / missing).unlink()
 
-    with pytest.raises(WorkflowError, match="already exists"):
-        build_video(request)
+    build_narrated_video(request, client=object(), cache_root=tmp_path / "cache")
 
-    assert request.output.read_bytes() == b"keep-me"
+    assert calls["narration"] == 2
+
+
+def test_changed_script_signature_rebuilds(tmp_path: Path, monkeypatch) -> None:
+    request = _request(tmp_path)
+    calls = _patch_success(monkeypatch, request)
+    build_narrated_video(request, client=object(), cache_root=tmp_path / "cache")
+    request.script.write_text("Mới. Slide 2: Hai.", encoding="utf-8")
+
+    build_narrated_video(request, client=object(), cache_root=tmp_path / "cache")
+
+    assert calls["narration"] == 2
+
+
+def test_failed_or_cancelled_staging_preserves_previous_published_directory(
+    tmp_path: Path, monkeypatch
+) -> None:
+    request = _request(tmp_path)
+    _patch_success(monkeypatch, request)
+    build_narrated_video(request, client=object(), cache_root=tmp_path / "cache")
+    before = _snapshot(request.artifact_directory)
+    request.script.write_text("Mới. Slide 2: Hai.", encoding="utf-8")
+    monkeypatch.setattr(
+        pipeline,
+        "build_narration",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(NarrationCancelled("stop")),
+    )
+
+    with pytest.raises(WorkflowCancelled, match="stop"):
+        build_narrated_video(request, client=object(), cache_root=tmp_path / "cache")
+
+    assert _snapshot(request.artifact_directory) == before
+
+
+def test_promotion_failure_rolls_back_previous_directory(
+    tmp_path: Path, monkeypatch
+) -> None:
+    request = _request(tmp_path)
+    _patch_success(monkeypatch, request)
+    build_narrated_video(request, client=object(), cache_root=tmp_path / "cache")
+    before = _snapshot(request.artifact_directory)
+    request.script.write_text("Mới. Slide 2: Hai.", encoding="utf-8")
+    real_replace = os.replace
+
+    def fail_staging_promotion(source, destination):
+        source_path, destination_path = Path(source), Path(destination)
+        if (
+            destination_path == request.artifact_directory
+            and ".staging-" in source_path.name
+        ):
+            raise OSError("publish rename failed")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(pipeline.os, "replace", fail_staging_promotion)
+
+    with pytest.raises(WorkflowError, match="publish rename failed"):
+        build_narrated_video(request, client=object(), cache_root=tmp_path / "cache")
+
+    assert _snapshot(request.artifact_directory) == before
+
+
+@pytest.mark.parametrize("field", ["pptx", "script", "logo", "outro"])
+def test_changed_input_before_publish_aborts_as_stale(
+    tmp_path: Path, monkeypatch, field: str
+) -> None:
+    request = _request(tmp_path)
+    _patch_success(monkeypatch, request)
+    target = Path(getattr(request, field))
+    real_join = pipeline.join_parts
+
+    def join_then_mutate(*args, **kwargs):
+        real_join(*args, **kwargs)
+        target.write_bytes(target.read_bytes() + b"changed")
+
+    monkeypatch.setattr(pipeline, "join_parts", join_then_mutate)
+
+    with pytest.raises(WorkflowError, match="inputs changed while job was running"):
+        build_narrated_video(request, client=object(), cache_root=tmp_path / "cache")
+    assert not request.artifact_directory.exists()
+
+
+def test_requires_all_four_inputs_before_work(tmp_path: Path, monkeypatch) -> None:
+    request = _request(tmp_path)
+    request.logo.unlink()
+    monkeypatch.setattr(
+        pipeline,
+        "build_narration",
+        lambda *_args, **_kwargs: pytest.fail("must validate before synthesis"),
+    )
+
+    with pytest.raises(WorkflowError, match="logo file does not exist"):
+        build_narrated_video(request, client=object(), cache_root=tmp_path / "cache")
 
 
 def test_final_validation_accepts_container_fps_rounding() -> None:
-    info = replace(_media(524_917), fps=Fraction(151164, 6299))
+    info = replace(_media(800), fps=Fraction(151164, 6299))
 
-    checks = _verify_final(info, expected_duration_ms=524_917, fps=24)
-
-    assert "video_24fps" in checks
-
-
-def test_final_validation_rejects_meaningful_fps_difference() -> None:
-    info = replace(_media(524_917), fps=Fraction(239, 10))
-
-    with pytest.raises(WorkflowError, match="expected 24 fps"):
-        _verify_final(info, expected_duration_ms=524_917, fps=24)
-
-
-def test_phase_failure_publishes_no_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    request = _request(tmp_path)
-    monkeypatch.setattr("video_workflow.pipeline.count_pptx_slides", lambda _: 20)
-    monkeypatch.setattr(
-        "video_workflow.pipeline.probe_media",
-        lambda path: _media(584_400) if Path(path) == request.source_media else _media(7701, width=720, height=1280),
-    )
-
-    def fail_export(*args, **kwargs):
-        raise RuntimeError("PowerPoint failed")
-
-    monkeypatch.setattr("video_workflow.pipeline.export_slides", fail_export)
-
-    with pytest.raises(WorkflowError, match="PowerPoint failed"):
-        build_video(request)
-
-    assert not request.output.exists()
-    assert not Path(f"{request.output}.report.json").exists()
-
-
-def test_overwrite_failure_preserves_previous_output(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    request = replace(_request(tmp_path), overwrite_output=True)
-    request.output.write_bytes(b"previous-video")
-    monkeypatch.setattr("video_workflow.pipeline.count_pptx_slides", lambda _: 20)
-    monkeypatch.setattr(
-        "video_workflow.pipeline.probe_media",
-        lambda path: (
-            _media(584_400)
-            if Path(path) == request.source_media
-            else _media(7701, width=720, height=1280)
-        ),
-    )
-    monkeypatch.setattr(
-        "video_workflow.pipeline.export_slides",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("PowerPoint failed")),
-    )
-
-    with pytest.raises(WorkflowError, match="PowerPoint failed"):
-        build_video(request)
-
-    assert request.output.read_bytes() == b"previous-video"
-
-
-def test_cancellation_during_final_probe_preserves_previous_output(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    request = replace(
-        _request(tmp_path), outro=None, write_report=False, overwrite_output=True
-    )
-    request.output.write_bytes(b"previous-video")
-    cancelled = threading.Event()
-    monkeypatch.setattr("video_workflow.pipeline.count_pptx_slides", lambda _: 20)
-
-    def fake_probe(path: Path) -> MediaInfo:
-        if Path(path) == request.source_media:
-            return _media(584_400)
-        cancelled.set()
-        return _media(580_791)
-
-    monkeypatch.setattr("video_workflow.pipeline.probe_media", fake_probe)
-    monkeypatch.setattr(
-        "video_workflow.pipeline.export_slides",
-        lambda _pptx, slide_ids, target, **_kwargs: {
-            slide_id: Path(target) / f"slide_{slide_id:03d}.png"
-            for slide_id in set(slide_ids)
-        },
-    )
-    monkeypatch.setattr(
-        "video_workflow.pipeline.render_lecture",
-        lambda *args, **_kwargs: Path(args[4]).write_bytes(b"new-video"),
-    )
-
-    with pytest.raises(WorkflowCancelled, match="cancelled"):
-        build_video(request, cancel_event=cancelled)
-
-    assert request.output.read_bytes() == b"previous-video"
-
-
-def test_manual_output_created_during_render_is_not_overwritten(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    request = replace(_request(tmp_path), outro=None)
-    monkeypatch.setattr("video_workflow.pipeline.count_pptx_slides", lambda _: 20)
-    monkeypatch.setattr(
-        "video_workflow.pipeline.probe_media",
-        lambda path: (
-            _media(584_400)
-            if Path(path) == request.source_media
-            else _media(580_791)
-        ),
-    )
-    monkeypatch.setattr(
-        "video_workflow.pipeline.export_slides",
-        lambda _pptx, slide_ids, target, **_kwargs: {
-            slide_id: Path(target) / f"slide_{slide_id:03d}.png"
-            for slide_id in set(slide_ids)
-        },
-    )
-
-    def render_with_late_output(*args, **_kwargs) -> None:
-        Path(args[4]).write_bytes(b"rendered-video")
-        request.output.write_bytes(b"late-output")
-
-    monkeypatch.setattr("video_workflow.pipeline.render_lecture", render_with_late_output)
-
-    with pytest.raises(WorkflowError, match="already exists"):
-        build_video(request)
-
-    assert request.output.read_bytes() == b"late-output"
-
-
-def test_success_publishes_verified_video_and_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    request = _request(tmp_path)
-    source_info = _media(584_400)
-    outro_info = _media(7701, width=720, height=1280)
-    final_info = _media(588_492)
-    monkeypatch.setattr("video_workflow.pipeline.count_pptx_slides", lambda _: 20)
-
-    def fake_probe(path: Path) -> MediaInfo:
-        path = Path(path)
-        if path == request.source_media:
-            return source_info
-        if path == request.outro:
-            return outro_info
-        return final_info
-
-    monkeypatch.setattr("video_workflow.pipeline.probe_media", fake_probe)
-
-    def fake_export(_pptx, slide_ids, target, **_kwargs):
-        result = {}
-        Path(target).mkdir(parents=True, exist_ok=True)
-        for slide_id in sorted(set(slide_ids)):
-            path = Path(target) / f"slide_{slide_id:03d}.png"
-            path.write_bytes(b"png")
-            result[slide_id] = path
-        return result
-
-    monkeypatch.setattr("video_workflow.pipeline.export_slides", fake_export)
-    monkeypatch.setattr(
-        "video_workflow.pipeline.render_lecture",
-        lambda *args, **kwargs: Path(args[4]).write_bytes(b"lecture"),
-    )
-    monkeypatch.setattr(
-        "video_workflow.pipeline.normalize_outro",
-        lambda *args, **kwargs: Path(args[1]).write_bytes(b"outro"),
-    )
-    monkeypatch.setattr(
-        "video_workflow.pipeline.join_parts",
-        lambda *args, **kwargs: Path(args[2]).write_bytes(b"final"),
-    )
-
-    stages: list[str] = []
-    report = build_video(request, on_stage=stages.append)
-
-    assert request.output.read_bytes() == b"final"
-    report_path = Path(f"{request.output}.report.json")
-    payload = json.loads(report_path.read_text(encoding="utf-8"))
-    assert report.slide_count == payload["slide_count"] == 20
-    assert payload["lecture_end_ms"] == 580_791
-    assert payload["trimmed_source_tail_ms"] == 3609
-    assert payload["expected_duration_ms"] == 588_492
-    assert payload["checks"] == ["video_1280x720", "video_24fps", "h264_aac_streams", "duration"]
-    assert stages == [
-        "validating", "exporting_slides", "rendering_lecture",
-        "preparing_outro", "joining", "verifying",
-    ]
-
-
-def test_success_can_publish_only_video_and_removes_stale_report(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    request = replace(
-        _request(tmp_path),
-        outro=None,
-        write_report=False,
-        overwrite_output=True,
-    )
-    request.output.write_bytes(b"previous-video")
-    report_path = Path(f"{request.output}.report.json")
-    report_path.write_text("stale", encoding="utf-8")
-    monkeypatch.setattr("video_workflow.pipeline.count_pptx_slides", lambda _: 20)
-    monkeypatch.setattr(
-        "video_workflow.pipeline.probe_media",
-        lambda path: (
-            _media(584_400)
-            if Path(path) == request.source_media
-            else _media(580_791)
-        ),
-    )
-
-    def fake_export(_pptx, slide_ids, target, **_kwargs):
-        Path(target).mkdir(parents=True, exist_ok=True)
-        return {
-            slide_id: Path(target) / f"slide_{slide_id:03d}.png"
-            for slide_id in set(slide_ids)
-        }
-
-    monkeypatch.setattr("video_workflow.pipeline.export_slides", fake_export)
-    monkeypatch.setattr(
-        "video_workflow.pipeline.render_lecture",
-        lambda *args, **_kwargs: Path(args[4]).write_bytes(b"video"),
-    )
-
-    build_video(request)
-
-    assert request.output.read_bytes() == b"video"
-    assert not report_path.exists()
-
-
-def test_cli_accepts_all_five_inputs_and_unicode_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    output = tmp_path / "kết quả có dấu.mp4"
-    captured: list[BuildRequest] = []
-
-    def fake_build(request: BuildRequest):
-        captured.append(request)
-        return object()
-
-    monkeypatch.setattr("video_workflow.cli.build_video", fake_build)
-
-    exit_code = main(
-        [
-            "--video",
-            str(FIXTURES / "TOAN7_C4_B12_T36_2.mp4"),
-            "--pptx",
-            str(FIXTURES / "TOAN7_C4_B12_T36_2_fixed.pptx"),
-            "--timeline",
-            str(FIXTURES / "timeline_slide_TOAN7_C4_B12_T36_2.txt"),
-            "--logo",
-            str(FIXTURES / "logo.png"),
-            "--outro",
-            str(FIXTURES / "outro.mp4"),
-            "--output",
-            str(output),
-        ]
-    )
-
-    assert exit_code == 0
-    assert captured[0].output == output
-    assert captured[0].source_media == FIXTURES / "TOAN7_C4_B12_T36_2.mp4"
-    assert captured[0].margin_px == 0
-
-
-def test_cli_accepts_source_media_alias(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: list[BuildRequest] = []
-    monkeypatch.setattr("video_workflow.cli.build_video", lambda request: captured.append(request) or object())
-    args = [
-        "--source-media", str(FIXTURES / "TOAN7_C4_B12_T36_2.mp4"),
-        "--pptx", str(FIXTURES / "TOAN7_C4_B12_T36_2_fixed.pptx"),
-        "--timeline", str(FIXTURES / "timeline_slide_TOAN7_C4_B12_T36_2.txt"),
-        "--logo", str(FIXTURES / "logo.png"), "--outro", str(FIXTURES / "outro.mp4"),
-        "--output", str(tmp_path / "new.mp4"),
-    ]
-    assert main(args) == 0
-    assert captured[0].source_media == FIXTURES / "TOAN7_C4_B12_T36_2.mp4"
-
-
-@pytest.mark.parametrize(
-    ("use_logo", "use_outro"),
-    [(True, False), (False, True), (False, False)],
-)
-def test_optional_asset_combinations_skip_only_missing_steps(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    use_logo: bool,
-    use_outro: bool,
-) -> None:
-    original = _request(tmp_path)
-    request = replace(
-        original,
-        logo=original.logo if use_logo else None,
-        outro=original.outro if use_outro else None,
-    )
-    lecture_end_ms = 580_791
-    outro_duration_ms = 7701 if use_outro else 0
-    final_info = _media(lecture_end_ms + outro_duration_ms)
-    monkeypatch.setattr("video_workflow.pipeline.count_pptx_slides", lambda _: 20)
-
-    def fake_probe(path: Path) -> MediaInfo:
-        path = Path(path)
-        if path == request.source_media:
-            return _media(584_400)
-        if request.outro is not None and path == request.outro:
-            return _media(7701, width=720, height=1280)
-        return final_info
-
-    monkeypatch.setattr("video_workflow.pipeline.probe_media", fake_probe)
-
-    def fake_export(_pptx, slide_ids, target, **_kwargs):
-        result = {}
-        Path(target).mkdir(parents=True, exist_ok=True)
-        for slide_id in sorted(set(slide_ids)):
-            path = Path(target) / f"slide_{slide_id:03d}.png"
-            path.write_bytes(b"png")
-            result[slide_id] = path
-        return result
-
-    rendered_logos = []
-    calls = []
-    monkeypatch.setattr("video_workflow.pipeline.export_slides", fake_export)
-
-    def fake_render(*args, **_kwargs):
-        rendered_logos.append(args[3])
-        Path(args[4]).write_bytes(b"lecture")
-
-    def fake_normalize(*args, **_kwargs):
-        calls.append("normalize")
-        Path(args[1]).write_bytes(b"outro")
-
-    def fake_join(*args, **_kwargs):
-        calls.append("join")
-        Path(args[2]).write_bytes(b"final")
-
-    monkeypatch.setattr("video_workflow.pipeline.render_lecture", fake_render)
-    monkeypatch.setattr("video_workflow.pipeline.normalize_outro", fake_normalize)
-    monkeypatch.setattr("video_workflow.pipeline.join_parts", fake_join)
-
-    stages: list[str] = []
-    report = build_video(request, on_stage=stages.append)
-
-    assert rendered_logos == [request.logo]
-    assert calls == (["normalize", "join"] if use_outro else [])
-    assert request.output.read_bytes() == (b"final" if use_outro else b"lecture")
-    assert report.inputs["logo"] == (str(request.logo.resolve()) if use_logo else None)
-    assert report.inputs["outro"] == (str(request.outro.resolve()) if use_outro else None)
-    assert report.outro_duration_ms == outro_duration_ms
-    assert report.expected_duration_ms == lecture_end_ms + outro_duration_ms
-    assert ("preparing_outro" in stages) is use_outro
-    assert ("joining" in stages) is use_outro
-
-
-def test_cli_allows_logo_and_outro_to_be_omitted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    captured: list[BuildRequest] = []
-    monkeypatch.setattr(
-        "video_workflow.cli.build_video",
-        lambda request: captured.append(request) or object(),
-    )
-
-    exit_code = main(
-        [
-            "--video",
-            str(FIXTURES / "TOAN7_C4_B12_T36_2.mp4"),
-            "--pptx",
-            str(FIXTURES / "TOAN7_C4_B12_T36_2_fixed.pptx"),
-            "--timeline",
-            str(FIXTURES / "timeline_slide_TOAN7_C4_B12_T36_2.txt"),
-            "--output",
-            str(tmp_path / "no-assets.mp4"),
-        ]
-    )
-
-    assert exit_code == 0
-    assert captured[0].logo is None
-    assert captured[0].outro is None
+    assert "video_24fps" in _verify_final(info, expected_duration_ms=800, fps=24)

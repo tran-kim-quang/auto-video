@@ -99,7 +99,7 @@ def _write_slide_concat(
 def render_lecture(
     slides: Mapping[int, Path],
     spans: Sequence[FrameSpan],
-    source_video: Path,
+    narration_audio: Path,
     logo: Path | None,
     target: Path,
     *,
@@ -118,11 +118,11 @@ def render_lecture(
             raise CompositionError("logo width ratio must be between 0 and 1")
         if margin_px < 0:
             raise CompositionError("logo margin must not be negative")
-    source_video = Path(source_video)
+    narration_audio = Path(narration_audio)
     logo = Path(logo) if logo is not None else None
     target = Path(target)
-    if not source_video.is_file():
-        raise CompositionError(f"source video does not exist: {source_video}")
+    if not narration_audio.is_file():
+        raise CompositionError(f"narration audio does not exist: {narration_audio}")
     if logo is not None and not logo.is_file():
         raise CompositionError(f"logo does not exist: {logo}")
 
@@ -149,7 +149,7 @@ def render_lecture(
             f"fps={fps},setsar=1[base]"
         )
         if logo is None:
-            media_inputs = ["-i", str(source_video.resolve())]
+            media_inputs = ["-i", str(narration_audio.resolve())]
             filter_graph = (
                 f"{base_filter};"
                 f"[base]null[v];"
@@ -166,7 +166,7 @@ def render_lecture(
                 "-i",
                 str(logo.resolve()),
                 "-i",
-                str(source_video.resolve()),
+                str(narration_audio.resolve()),
             ]
             filter_graph = (
                 f"{base_filter};"
