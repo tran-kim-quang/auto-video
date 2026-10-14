@@ -51,6 +51,21 @@ find_office() {
   fi
 }
 
+find_voicestudio() {
+  local configured_backend="${VOICESTUDIO_BACKEND:-}"
+  local user_backend="${HOME}/.config/VoiceStudio/runtime/project/backend/main.py"
+  local desktop_app="/opt/VoiceStudio/voicestudio-electron"
+  if [[ -n "$configured_backend" && -f "$configured_backend" ]]; then
+    printf '%s\n' "$configured_backend"
+  elif [[ -f "$user_backend" ]]; then
+    printf '%s\n' "$user_backend"
+  elif [[ -x "$desktop_app" ]]; then
+    printf '%s\n' "$desktop_app"
+  else
+    return 1
+  fi
+}
+
 check_dependencies() {
   CHECK_FAILURES=0
 
@@ -96,6 +111,13 @@ check_dependencies() {
     report_check "pdftocairo" "PASS" "$(command -v pdftocairo)"
   else
     report_check "pdftocairo" "FAIL" "install poppler-utils"
+  fi
+
+  local voicestudio=""
+  if voicestudio="$(find_voicestudio)"; then
+    report_check "VoiceStudio" "PASS" "$voicestudio (API http://127.0.0.1:3900)"
+  else
+    report_check "VoiceStudio" "FAIL" "install VoiceStudio or set VOICESTUDIO_BACKEND; setup never installs it"
   fi
 
   if [[ -x "$VENV_PYTHON" ]] &&

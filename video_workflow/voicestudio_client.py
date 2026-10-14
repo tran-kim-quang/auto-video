@@ -100,12 +100,18 @@ class VoiceStudioClient:
         base_url: str,
         *,
         timeout_seconds: float = 30.0,
+        generation_timeout_seconds: float = 600.0,
         max_error_bytes: int = 8192,
     ) -> None:
-        if timeout_seconds <= 0 or max_error_bytes <= 0:
+        if (
+            timeout_seconds <= 0
+            or generation_timeout_seconds <= 0
+            or max_error_bytes <= 0
+        ):
             raise ValueError("timeouts and response limits must be positive")
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        self.generation_timeout_seconds = generation_timeout_seconds
         self.max_error_bytes = max_error_bytes
 
     def _url(self, path: str) -> str:
@@ -207,7 +213,7 @@ class VoiceStudioClient:
         destination.parent.mkdir(parents=True, exist_ok=True)
         response = None
         try:
-            response = urlopen(request, timeout=self.timeout_seconds)
+            response = urlopen(request, timeout=self.generation_timeout_seconds)
             response_type = response.headers.get_content_type().casefold()
             if response_type not in {"audio/wav", "audio/x-wav", "audio/wave"}:
                 raise VoiceStudioError(

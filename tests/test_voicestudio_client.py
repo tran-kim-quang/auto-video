@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from video_workflow import voicestudio_client
 from video_workflow.voicestudio_client import (
     VoiceStudioClient,
     VoiceStudioConfig,
@@ -129,6 +130,51 @@ def test_generate_sends_literal_semicolons_and_fixed_quality(
     assert metadata.audio_id == "audio-123"
     assert metadata.generation_seconds == 1.25
     assert metadata.routing_headers == {"X-OmniVoice-Routing": "cuda"}
+
+
+def test_generation_uses_long_timeout_without_weakening_api_health_timeout(
+    monkeypatch, tmp_path: Path
+) -> None:
+    timeouts = []
+
+    class Headers:
+        def get_content_type(self):
+            return "audio/wav"
+
+        def get(self, name):
+            return str(len(WAV)) if name == "Content-Length" else None
+
+        def items(self):
+            return []
+
+    class Response:
+        headers = Headers()
+
+        def __init__(self):
+            self.remaining = WAV
+
+        def read(self, _size):
+            chunk, self.remaining = self.remaining, b""
+            return chunk
+
+        def close(self):
+            return None
+
+    def fake_urlopen(_request, *, timeout):
+        timeouts.append(timeout)
+        return Response()
+
+    monkeypatch.setattr(voicestudio_client, "urlopen", fake_urlopen)
+    client = VoiceStudioClient(
+        "http://127.0.0.1:3900",
+        timeout_seconds=3,
+        generation_timeout_seconds=600,
+    )
+
+    client.generate("Một", tmp_path / "long.partial", VoiceStudioConfig())
+
+    assert timeouts == [600]
+    assert client.timeout_seconds == 3
 
 
 def test_require_profile_matches_identifier_not_display_name(http_stub) -> None:
