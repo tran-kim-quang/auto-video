@@ -4,7 +4,9 @@ import os
 from pathlib import Path
 
 from video_workflow import folder_batch
-from video_workflow.folder_batch import discover_folder_jobs
+from video_workflow.folder_batch import discover_folder_jobs, queue_folder_jobs
+from video_workflow.json_store import JsonStore
+from video_workflow.queue_controller import QueueController
 
 
 def _file(path: Path) -> Path:
@@ -149,3 +151,25 @@ def test_job_order_is_deterministic_across_walk_order(
     result = discover_folder_jobs(tmp_path)
 
     assert [job.pptx.name for job in result.jobs] == ["alpha.pptx", "Beta.pptx"]
+
+
+def test_batch_scan_enqueues_every_pair_and_repeated_scan_creates_fresh_jobs(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "lessons"
+    for stem in ("one", "two"):
+        _file(root / f"{stem}.pptx")
+        _file(root / f"{stem}.txt")
+    logo, outro = _file(tmp_path / "logo.png"), _file(tmp_path / "outro.mp4")
+    controller = QueueController(JsonStore(tmp_path / "data"))
+    controller.set_global_assets(logo, outro)
+
+    first = queue_folder_jobs(controller, root)
+    second = queue_folder_jobs(controller, root)
+
+    assert [job.output_path for job in first.queued] == [
+        root / "output" / "one" / "one.mp4",
+        root / "output" / "two" / "two.mp4",
+    ]
+    assert second.issues == ()
+    assert len(controller.jobs()) == 4

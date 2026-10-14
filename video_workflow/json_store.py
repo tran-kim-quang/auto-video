@@ -67,6 +67,13 @@ class JsonStore:
             if payload is None:
                 return GlobalSettings()
             try:
+                if payload.get("schema_version") == 1:
+                    settings = GlobalSettings(
+                        logo=Path(payload["logo"]) if payload.get("logo") else None,
+                        outro=Path(payload["outro"]) if payload.get("outro") else None,
+                    )
+                    self.save_settings(settings)
+                    return settings
                 return GlobalSettings.from_dict(payload)
             except (KeyError, TypeError, ValueError) as exc:
                 self._preserve_invalid(self.root / "settings.json", f"Invalid settings.json: {exc}")
@@ -82,7 +89,24 @@ class JsonStore:
             if payload is None:
                 return []
             try:
-                if payload.get("schema_version") != 1 or not isinstance(payload.get("jobs"), list):
+                if payload.get("schema_version") == 1:
+                    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+                    archive = self.root / f"jobs.legacy-v1-{stamp}.json"
+                    self._atomic_write(
+                        archive,
+                        {
+                            "migration_reason": (
+                                "legacy source-media jobs are not narration jobs"
+                            ),
+                            "legacy_payload": payload,
+                        },
+                    )
+                    self.save_jobs([])
+                    self._warnings.append(
+                        f"Archived legacy source-media jobs as {archive.name}"
+                    )
+                    return []
+                if payload.get("schema_version") != 2 or not isinstance(payload.get("jobs"), list):
                     raise ValueError("unsupported jobs schema")
                 return [JobRecord.from_dict(item) for item in payload["jobs"]]
             except (KeyError, TypeError, ValueError) as exc:
@@ -93,5 +117,5 @@ class JsonStore:
         with self._lock:
             self._atomic_write(
                 self.root / "jobs.json",
-                {"schema_version": 1, "jobs": [job.to_dict() for job in jobs]},
+                {"schema_version": 2, "jobs": [job.to_dict() for job in jobs]},
             )
