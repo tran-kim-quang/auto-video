@@ -205,8 +205,15 @@ def _load_completed_report(
 def _validate_retained_artifacts(
     root: Path, report: NarratedBuildReport, request: NarratedBuildRequest
 ) -> None:
-    if report.slide_count <= 0 or len(report.slides) != report.slide_count:
+    if report.slide_count <= 0 or not report.slides:
         raise WorkflowError("completed report has an invalid slide count")
+    slide_ids = [int(row["slide_id"]) for row in report.slides]
+    if (
+        slide_ids[0] not in {1, 2}
+        or slide_ids[-1] != report.slide_count
+        or slide_ids != list(range(slide_ids[0], report.slide_count + 1))
+    ):
+        raise WorkflowError("completed report has an invalid slide range")
 
     timeline = parse_timeline(root / "timeline.json")
     validate_timeline(
@@ -231,7 +238,7 @@ def _validate_retained_artifacts(
         or manifest.get("schema_version") != 1
         or manifest.get("config") != asdict(request.profile_config)
         or not isinstance(manifest.get("slides"), list)
-        or len(manifest["slides"]) != report.slide_count
+        or len(manifest["slides"]) != len(report.slides)
     ):
         raise WorkflowError("completed audio manifest is invalid")
 
@@ -271,7 +278,7 @@ def _validate_retained_artifacts(
     if (
         not combined_info.has_audio
         or abs(combined_info.duration_ms - report.total_narration_duration_ms)
-        > 20 * report.slide_count
+        > 20 * len(report.slides)
     ):
         raise WorkflowError("completed combined narration is invalid")
 

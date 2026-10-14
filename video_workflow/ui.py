@@ -7,12 +7,11 @@ import sys
 import tkinter as tk
 from dataclasses import dataclass
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from .folder_batch import queue_folder_jobs
 from .job_models import JobRecord, JobStatus
 from .json_store import JsonStore
-from .live_path_dialog import LivePathDialog
 from .queue_controller import QueueController, QueueStateError
 from .worker import QueueWorker
 
@@ -227,37 +226,42 @@ class WorkflowApp:
 
     def _initial_directory(self, variable: tk.StringVar) -> Path:
         raw = variable.get().strip()
-        if raw:
-            candidate = Path(raw).expanduser()
-            if candidate.is_dir():
-                return candidate
-            if candidate.parent.is_dir():
-                return candidate.parent
-        return self._last_directory
+        candidate = Path(raw).expanduser() if raw else self._last_directory
+        if candidate.is_file():
+            candidate = candidate.parent
+        while not candidate.is_dir() and candidate != candidate.parent:
+            candidate = candidate.parent
+        if candidate.is_dir():
+            return candidate.resolve()
+        if Path.home().is_dir():
+            return Path.home().resolve()
+        return Path.cwd().resolve()
 
     def _choose_file(
         self, variable: tk.StringVar, filetypes: list[tuple[str, str]]
     ) -> None:
-        path = LivePathDialog(
-            self.root,
+        path = filedialog.askopenfilename(
+            parent=self.root,
             title="Select file",
-            initial_directory=self._initial_directory(variable),
+            initialdir=str(self._initial_directory(variable)),
             filetypes=filetypes,
-        ).show()
+        )
         if path:
-            variable.set(path)
-            self._last_directory = Path(path).parent
+            selected = Path(path).expanduser().resolve()
+            variable.set(str(selected))
+            self._last_directory = selected.parent
 
     def _choose_directory(self, variable: tk.StringVar) -> None:
-        path = LivePathDialog(
-            self.root,
+        path = filedialog.askdirectory(
+            parent=self.root,
             title="Select folder",
-            initial_directory=self._initial_directory(variable),
-            select_directory=True,
-        ).show()
+            initialdir=str(self._initial_directory(variable)),
+            mustexist=True,
+        )
         if path:
-            variable.set(path)
-            self._last_directory = Path(path)
+            selected = Path(path).expanduser().resolve()
+            variable.set(str(selected))
+            self._last_directory = selected
 
     def choose_logo(self) -> None:
         self._choose_file(

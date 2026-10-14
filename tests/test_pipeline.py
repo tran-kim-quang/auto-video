@@ -52,7 +52,7 @@ def _request(tmp_path: Path) -> NarratedBuildRequest:
     logo = inputs / "logo.png"
     outro = inputs / "outro.mp4"
     pptx.write_bytes(b"pptx-v1")
-    script.write_text("Một. Slide 2: Hai.", encoding="utf-8")
+    script.write_text("Slide 1: Một. Slide 2: Hai.", encoding="utf-8")
     logo.write_bytes(b"logo-v1")
     outro.write_bytes(b"outro-v1")
     return NarratedBuildRequest(
@@ -65,7 +65,10 @@ def _request(tmp_path: Path) -> NarratedBuildRequest:
     )
 
 
-def _fake_narration(artifact_directory: Path) -> NarrationResult:
+def _fake_narration(
+    artifact_directory: Path,
+    rows=((1, "Một.", 120), (2, "Hai.", 180)),
+) -> NarrationResult:
     artifact_directory = Path(artifact_directory)
     audio = artifact_directory / "audio"
     audio.mkdir(parents=True, exist_ok=True)
@@ -73,7 +76,7 @@ def _fake_narration(artifact_directory: Path) -> NarrationResult:
     cursor = 0
     timeline = []
     manifest_slides = []
-    for slide_id, text, duration in ((1, "Một.", 120), (2, "Hai.", 180)):
+    for slide_id, text, duration in rows:
         wav = audio / f"slide_{slide_id:03d}.wav"
         with wave.open(str(wav), "wb") as output:
             output.setnchannels(1)
@@ -290,6 +293,63 @@ def test_matching_signature_and_valid_artifacts_skip_all_build_steps(
     assert calls["narration"] == 1
 
 
+def test_completed_build_starting_at_slide_two_is_reused(
+    tmp_path: Path, monkeypatch
+) -> None:
+    request = _request(tmp_path)
+    request.script.write_text(
+        "HEADER\n====\nSlide 2: Hai. Slide 3: Ba.\n====", encoding="utf-8"
+    )
+    calls = _patch_success(monkeypatch, request)
+    monkeypatch.setattr(pipeline, "count_pptx_slides", lambda _path: 3)
+
+    def probe_partial_range(path):
+        path = Path(path)
+        if path == request.outro:
+            return _media(500, width=720, height=1280)
+        if path.name == "combined.wav":
+            return replace(
+                _media(300, width=None, height=None), sample_rate=8_000, channels=1
+            )
+        if path.name == "slide_002.wav":
+            return replace(
+                _media(120, width=None, height=None), sample_rate=8_000, channels=1
+            )
+        if path.name == "slide_003.wav":
+            return replace(
+                _media(180, width=None, height=None), sample_rate=8_000, channels=1
+            )
+        return _media(800)
+
+    monkeypatch.setattr(pipeline, "probe_media", probe_partial_range)
+
+    def build_from_slide_two(
+        _segments, _client, artifact, _cache, _config, **_kwargs
+    ):
+        calls["narration"] += 1
+        return _fake_narration(
+            Path(artifact), rows=((2, "Hai.", 120), (3, "Ba.", 180))
+        )
+
+    monkeypatch.setattr(pipeline, "build_narration", build_from_slide_two)
+    first = build_narrated_video(
+        request, client=object(), cache_root=tmp_path / "cache"
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "build_narration",
+        lambda *_args, **_kwargs: pytest.fail("completed partial slide range must be reused"),
+    )
+
+    second = build_narrated_video(
+        request, client=object(), cache_root=tmp_path / "cache"
+    )
+
+    assert first.slide_count == second.slide_count == 3
+    assert [row["slide_id"] for row in second.slides] == [2, 3]
+    assert calls["narration"] == 1
+
+
 @pytest.mark.parametrize("missing", ["combined.wav", "audio/slide_002.wav"])
 def test_stale_or_missing_artifact_rebuilds(
     tmp_path: Path, monkeypatch, missing: str
@@ -328,7 +388,7 @@ def test_changed_script_signature_rebuilds(tmp_path: Path, monkeypatch) -> None:
     request = _request(tmp_path)
     calls = _patch_success(monkeypatch, request)
     build_narrated_video(request, client=object(), cache_root=tmp_path / "cache")
-    request.script.write_text("Mới. Slide 2: Hai.", encoding="utf-8")
+    request.script.write_text("Slide 1: Mới. Slide 2: Hai.", encoding="utf-8")
 
     build_narrated_video(request, client=object(), cache_root=tmp_path / "cache")
 
@@ -342,7 +402,7 @@ def test_failed_or_cancelled_staging_preserves_previous_published_directory(
     _patch_success(monkeypatch, request)
     build_narrated_video(request, client=object(), cache_root=tmp_path / "cache")
     before = _snapshot(request.artifact_directory)
-    request.script.write_text("Mới. Slide 2: Hai.", encoding="utf-8")
+    request.script.write_text("Slide 1: Mới. Slide 2: Hai.", encoding="utf-8")
     monkeypatch.setattr(
         pipeline,
         "build_narration",
@@ -362,7 +422,7 @@ def test_promotion_failure_rolls_back_previous_directory(
     _patch_success(monkeypatch, request)
     build_narrated_video(request, client=object(), cache_root=tmp_path / "cache")
     before = _snapshot(request.artifact_directory)
-    request.script.write_text("Mới. Slide 2: Hai.", encoding="utf-8")
+    request.script.write_text("Slide 1: Mới. Slide 2: Hai.", encoding="utf-8")
     real_replace = os.replace
 
     def fail_staging_promotion(source, destination):

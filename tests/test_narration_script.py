@@ -14,11 +14,12 @@ from video_workflow.narration_script import (
 )
 
 
-def test_parses_inline_markers_and_implicit_slide_one() -> None:
-    segments = parse_slide_script_text("Mở đầu. Slide 2: Hai. Slide 3: Ba.")
+def test_discards_header_and_starts_at_slide_two_when_slide_one_is_absent() -> None:
+    segments = parse_slide_script_text(
+        "TIÊU ĐỀ KHÔNG ĐỌC\n=====\nSlide 2: Hai. Slide 3: Ba.\n====="
+    )
 
     assert [(segment.slide_id, segment.text) for segment in segments] == [
-        (1, "Mở đầu."),
         (2, "Hai."),
         (3, "Ba."),
     ]
@@ -26,7 +27,7 @@ def test_parses_inline_markers_and_implicit_slide_one() -> None:
 
 def test_accepts_explicit_slide_one_and_multiline_text() -> None:
     segments = parse_slide_script_text(
-        "Slide 1:\nDòng một.\nSlide 2: Dòng hai.\nDòng tiếp theo."
+        "HEADER\n====\nSlide 1:\nDòng một.\nSlide 2: Dòng hai.\nDòng tiếp theo.\n****"
     )
 
     assert [segment.text for segment in segments] == [
@@ -36,7 +37,9 @@ def test_accepts_explicit_slide_one_and_multiline_text() -> None:
 
 
 def test_preserves_math_semicolons_and_normalizes_unicode_nfc() -> None:
-    segments = parse_slide_script_text("Điểm A (0; 6; 3). Slide 2: Cafe\u0301.")
+    segments = parse_slide_script_text(
+        "Slide 1: Điểm A (0; 6; 3). Slide 2: Cafe\u0301."
+    )
 
     assert segments[0].text == "Điểm A (0; 6; 3)."
     assert segments[1].text == "Café."
@@ -52,7 +55,7 @@ def test_preserves_math_semicolons_and_normalizes_unicode_nfc() -> None:
         ("Slide 1: A Slide 3: C", "expected slide 2"),
         ("Slide 1: A Slide 2: B Slide 2: C", "duplicate slide 2"),
         ("Slide 0: A", "slide identifiers must be positive"),
-        ("Preface Slide 1: A", "content before explicit Slide 1"),
+        ("Slide 3: A", "expected slide 1 or slide 2"),
     ],
 )
 def test_rejects_invalid_slide_sequences(source: str, message: str) -> None:
@@ -60,16 +63,23 @@ def test_rejects_invalid_slide_sequences(source: str, message: str) -> None:
         parse_slide_script_text(source)
 
 
-def test_requires_script_count_to_equal_pptx_count() -> None:
-    segments = parse_slide_script_text("A. Slide 2: B.")
+def test_requires_script_range_to_end_at_final_pptx_slide() -> None:
+    segments = parse_slide_script_text("Slide 1: A. Slide 2: B.")
 
-    with pytest.raises(ScriptError, match="PPTX has 3 slides.*script has 2"):
+    with pytest.raises(ScriptError, match="must end at slide 3"):
         validate_script_slide_count(segments, 3)
+
+
+def test_accepts_contiguous_script_starting_at_slide_two() -> None:
+    segments = parse_slide_script_text("Header. Slide 2: B. Slide 3: C.")
+
+    validate_script_slide_count(segments, 3)
+    assert [segment.slide_id for segment in segments] == [2, 3]
 
 
 def test_load_slide_script_reads_utf8_strictly_and_reports_path(tmp_path: Path) -> None:
     valid = tmp_path / "lesson.txt"
-    valid.write_text("Một. Slide 2: Hai.", encoding="utf-8")
+    valid.write_text("Slide 1: Một. Slide 2: Hai.", encoding="utf-8")
     assert [segment.text for segment in load_slide_script(valid)] == ["Một.", "Hai."]
 
     invalid = tmp_path / "broken.txt"

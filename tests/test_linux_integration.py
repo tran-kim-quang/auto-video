@@ -101,7 +101,7 @@ def test_real_linux_slide_and_ffmpeg_pipeline_builds_complete_tree(
     logo = inputs / "logo.png"
     outro = inputs / "outro.mp4"
     _make_presentation(pptx)
-    script.write_text("Một. Slide 2: Hai.", encoding="utf-8")
+    script.write_text("Slide 1: Một. Slide 2: Hai.", encoding="utf-8")
     Image.new("RGBA", (96, 48), (255, 255, 255, 180)).save(logo)
     _make_outro(outro)
 

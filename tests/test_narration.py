@@ -67,11 +67,17 @@ class _Client:
         return {"flushed": True}
 
 
-def _segments(source: str = "Một. Slide 2: Hai."):
+def _segments(source: str = "Slide 1: Một. Slide 2: Hai."):
     return parse_slide_script_text(source)
 
 
-def _build(tmp_path: Path, client=None, *, source="Một. Slide 2: Hai.", config=None):
+def _build(
+    tmp_path: Path,
+    client=None,
+    *,
+    source="Slide 1: Một. Slide 2: Hai.",
+    config=None,
+):
     return build_narration(
         _segments(source),
         client or _Client(),
@@ -161,7 +167,7 @@ def test_editing_one_text_regenerates_only_that_slide(tmp_path: Path) -> None:
     _build(tmp_path, _Client())
     client = _Client(durations={"Một.": 120, "Ba.": 100})
 
-    _build(tmp_path, client, source="Một. Slide 2: Ba.")
+    _build(tmp_path, client, source="Slide 1: Một. Slide 2: Ba.")
 
     assert [call[0] for call in client.calls] == ["Ba."]
 
@@ -265,6 +271,6 @@ def test_rename_failure_never_replaces_previous_validated_wav(
     client = _Client(durations={"Mới.": 100, "Hai.": 180})
 
     with pytest.raises(NarrationError, match="disk rename failed"):
-        _build(tmp_path, client, source="Mới. Slide 2: Hai.")
+        _build(tmp_path, client, source="Slide 1: Mới. Slide 2: Hai.")
 
     assert cached.read_bytes() == original
