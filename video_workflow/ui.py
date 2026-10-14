@@ -10,27 +10,21 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 
 from .folder_batch import queue_folder_jobs
-from .job_models import JobKind, JobRecord, JobStatus
+from .job_models import JobRecord, JobStatus
 from .json_store import JsonStore
 from .live_path_dialog import LivePathDialog
 from .queue_controller import QueueController, QueueStateError
 from .worker import QueueWorker
 
 
-BATCH_FOLDER_GUIDE = """Quy ước đặt tên (ứng dụng quét đệ quy và chỉ xử lý folder lá):
-• Folder lá: tên tùy ý, ví dụ:
-  demo_Test/
-    TOAN7_C4_B13_T38_1.pptx
-    TOAN7_C4_B13_T38_1.mp4
-    timeline_slide_TOAN7_C4_B13_T38_1.txt
-    TOAN7_C4_B13_T38_2.pptx
-    TOAN7_C4_B13_T38_2.mp4
-    TOAN7_C4_B13_T38_2.txt
-• Mỗi PPTX phải kết thúc bằng _1 hoặc _2; media dùng đúng cùng tên.
-• Timeline: <tên PPTX>.txt/json hoặc timeline_slide_<tên PPTX>.txt/json.
-• Output tự tạo: output/TOAN7_C4_B13_T38_1.mp4, output/TOAN7_C4_B13_T38_2.mp4
-• Outro: chỉ part 2. Logo: cả hai part.
-• Mỗi lần scan đều thêm job mới; output cũ chỉ được thay sau khi dựng thành công."""
+FIXED_PROFILE_LABEL = "Teacher_male — 599fc048 (32 steps, GPU)"
+PROFILE_ENTRY_STATE = "readonly"
+BATCH_FOLDER_GUIDE = """Quy ước đầu vào (quét đệ quy):
+• Mỗi bài gồm hai file cùng tên: lesson.pptx + lesson.txt.
+• TXT dùng marker Slide N:; phần trước Slide 2 là nội dung slide 1.
+• Logo và outro phía trên được áp dụng cho mọi bài.
+• Output: <thư mục bài>/output/lesson/lesson.mp4 cùng audio, timeline và report.
+• Chỉ một bài chạy tại một thời điểm; job mới có thể tái sử dụng WAV hợp lệ."""
 
 
 def application_data_root() -> Path:
@@ -48,79 +42,31 @@ def _open_directory(path: Path) -> None:
         raise OSError(f"opening folders is unsupported on {sys.platform}")
 
 
-@dataclass(frozen=True, slots=True)
-class JobFormData:
-    source_media: Path
-    pptx: Path
-    timeline: Path
-    output_name: str
-    output_directory: Path
-
-    @classmethod
-    def from_strings(
-        cls,
-        source_media: str,
-        pptx: str,
-        timeline: str,
-        output_name: str,
-        output_directory: str,
-    ) -> JobFormData:
-        values = {
-            "source media": source_media.strip(),
-            "PPTX": pptx.strip(),
-            "timeline": timeline.strip(),
-            "output name": output_name.strip(),
-            "output directory": output_directory.strip(),
-        }
-        missing = next((label for label, value in values.items() if not value), None)
-        if missing:
-            raise ValueError(f"{missing} is required")
-        return cls(
-            source_media=Path(values["source media"]),
-            pptx=Path(values["PPTX"]),
-            timeline=Path(values["timeline"]),
-            output_name=values["output name"],
-            output_directory=Path(values["output directory"]),
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class MergeFormData:
-    first_video: Path
-    second_video: Path
-    output_name: str
-    output_directory: Path
-
-    @classmethod
-    def from_strings(
-        cls,
-        first_video: str,
-        second_video: str,
-        output_name: str,
-        output_directory: str,
-    ) -> MergeFormData:
-        values = {
-            "first video": first_video.strip(),
-            "second video": second_video.strip(),
-            "output name": output_name.strip(),
-            "output directory": output_directory.strip(),
-        }
-        missing = next((label for label, value in values.items() if not value), None)
-        if missing:
-            raise ValueError(f"{missing} is required")
-        return cls(
-            first_video=Path(values["first video"]),
-            second_video=Path(values["second video"]),
-            output_name=values["output name"],
-            output_directory=Path(values["output directory"]),
-        )
+def job_row(job: JobRecord) -> tuple[str, ...]:
+    progress = (
+        f"{job.progress_current}/{job.progress_total}"
+        if job.progress_total
+        else ""
+    )
+    result = job.error or (
+        str(job.output_path) if job.status is JobStatus.COMPLETED else ""
+    )
+    return (
+        job.pptx.stem,
+        str(job.pptx),
+        str(job.script),
+        job.status.value,
+        job.stage.value if job.stage is not None else "",
+        progress,
+        str(job.artifact_directory),
+        result,
+    )
 
 
 @dataclass(slots=True)
 class _PathBinding:
     variable: tk.StringVar
     kind: str
-    optional: bool
     indicator: ttk.Label
 
 
@@ -133,32 +79,23 @@ class WorkflowApp:
         self.worker = worker
         self._closing = False
         self._path_bindings: list[_PathBinding] = []
-        self._waiting_readiness: dict[str, bool] = {}
         self._last_directory = Path.cwd()
-        root.title("Pyramid Slide Video Queue")
-        root.geometry("1120x720")
-        root.minsize(900, 600)
+        root.title("Pyramid Batch TTS Slide Video")
+        root.geometry("1180x760")
+        root.minsize(920, 620)
 
         settings = controller.settings
         self.logo_var = tk.StringVar(value=str(settings.logo or ""))
         self.outro_var = tk.StringVar(value=str(settings.outro or ""))
-        self.source_var = tk.StringVar()
-        self.pptx_var = tk.StringVar()
-        self.timeline_var = tk.StringVar()
-        self.output_name_var = tk.StringVar()
-        self.output_directory_var = tk.StringVar()
         self.batch_root_var = tk.StringVar()
-        self.first_video_var = tk.StringVar()
-        self.second_video_var = tk.StringVar()
-        self.merge_output_name_var = tk.StringVar()
-        self.merge_output_directory_var = tk.StringVar()
+        self.profile_var = tk.StringVar(value=FIXED_PROFILE_LABEL)
         self.status_var = tk.StringVar(value="Ready")
 
         self._build_layout()
         self.refresh_jobs()
         root.protocol("WM_DELETE_WINDOW", self.close)
         root.after(200, self._poll_worker_events)
-        root.after(250, self._poll_filesystem)
+        root.after(1000, self._poll_filesystem)
 
     def _path_row(
         self,
@@ -167,10 +104,8 @@ class WorkflowApp:
         label: str,
         variable: tk.StringVar,
         command,
-        button="Browse",
         *,
         kind: str = "file",
-        optional: bool = False,
     ) -> None:
         ttk.Label(parent, text=label).grid(
             row=row, column=0, sticky="w", padx=(0, 8), pady=3
@@ -180,8 +115,8 @@ class WorkflowApp:
         )
         indicator = ttk.Label(parent, width=12, anchor="e")
         indicator.grid(row=row, column=2, padx=(8, 0), pady=3, sticky="e")
-        self._path_bindings.append(_PathBinding(variable, kind, optional, indicator))
-        ttk.Button(parent, text=button, command=command).grid(
+        self._path_bindings.append(_PathBinding(variable, kind, indicator))
+        ttk.Button(parent, text="Browse", command=command).grid(
             row=row, column=3, padx=(8, 0), pady=3
         )
 
@@ -194,166 +129,94 @@ class WorkflowApp:
         outer = ttk.Frame(self.root, padding=12)
         outer.pack(fill="both", expand=True)
 
-        global_box = ttk.LabelFrame(outer, text="Global assets", padding=10)
-        global_box.pack(fill="x")
-        global_box.columnconfigure(1, weight=1)
-        self._path_row(
-            global_box,
-            0,
-            "Logo (optional)",
-            self.logo_var,
-            self.choose_logo,
-            optional=True,
+        assets = ttk.LabelFrame(outer, text="Global assets (required)", padding=10)
+        assets.pack(fill="x")
+        assets.columnconfigure(1, weight=1)
+        self._path_row(assets, 0, "Logo", self.logo_var, self.choose_logo)
+        self._path_row(assets, 1, "Outro", self.outro_var, self.choose_outro)
+        ttk.Label(assets, text="Fixed voice profile").grid(
+            row=2, column=0, sticky="w", pady=3
         )
-        self._path_row(
-            global_box,
-            1,
-            "Outro (optional)",
-            self.outro_var,
-            self.choose_outro,
-            optional=True,
+        ttk.Entry(
+            assets,
+            textvariable=self.profile_var,
+            state=PROFILE_ENTRY_STATE,
+        ).grid(row=2, column=1, sticky="ew", pady=3)
+        ttk.Button(assets, text="Save assets", command=self.save_global_assets).grid(
+            row=3, column=3, sticky="e", pady=(6, 0)
         )
-        ttk.Button(
-            global_box, text="Save assets", command=self.save_global_assets
-        ).grid(row=2, column=3, sticky="e", pady=(6, 0))
 
-        job_tabs = ttk.Notebook(outer)
-        job_tabs.pack(fill="x", pady=10)
-
-        form = ttk.Frame(job_tabs, padding=10)
-        form.columnconfigure(1, weight=1)
-        job_tabs.add(form, text="Build slide video")
-        self._path_row(form, 0, "Video or audio", self.source_var, self.choose_source)
-        self._path_row(form, 1, "PPTX", self.pptx_var, self.choose_pptx)
+        batch = ttk.LabelFrame(outer, text="Batch Folder", padding=10)
+        batch.pack(fill="x", pady=10)
+        batch.columnconfigure(1, weight=1)
         self._path_row(
-            form, 2, "Timeline TXT/JSON", self.timeline_var, self.choose_timeline
-        )
-        ttk.Label(form, text="Output name").grid(row=3, column=0, sticky="w", pady=3)
-        ttk.Entry(form, textvariable=self.output_name_var).grid(
-            row=3, column=1, sticky="ew", pady=3
-        )
-        self._path_row(
-            form,
-            4,
-            "Output directory",
-            self.output_directory_var,
-            self.choose_output_directory,
-            kind="directory",
-        )
-        self.add_button = ttk.Button(form, text="Add to queue", command=self.submit_job)
-        self.add_button.grid(row=5, column=3, sticky="e", pady=(8, 0))
-
-        batch_form = ttk.Frame(job_tabs, padding=10)
-        batch_form.columnconfigure(1, weight=1)
-        job_tabs.add(batch_form, text="Batch folder")
-        self._path_row(
-            batch_form,
+            batch,
             0,
             "Input root",
             self.batch_root_var,
             self.choose_batch_root,
             kind="directory",
         )
-        guide_box = ttk.LabelFrame(
-            batch_form, text="Folder & file naming", padding=8
-        )
-        guide_box.grid(
-            row=1, column=0, columnspan=4, sticky="ew", pady=(8, 0)
-        )
         ttk.Label(
-            guide_box,
+            batch,
             text=BATCH_FOLDER_GUIDE,
             justify="left",
             anchor="w",
             font="TkFixedFont",
-        ).pack(fill="x")
+        ).grid(row=1, column=0, columnspan=4, sticky="ew", pady=(8, 0))
         self.batch_button = ttk.Button(
-            batch_form, text="Scan and add to queue", command=self.submit_batch_folder
+            batch, text="Scan & Add All", command=self.submit_batch_folder
         )
         self.batch_button.grid(row=2, column=3, sticky="e", pady=(8, 0))
-
-        merge_form = ttk.Frame(job_tabs, padding=10)
-        merge_form.columnconfigure(1, weight=1)
-        job_tabs.add(merge_form, text="Merge 2 videos")
-        self._path_row(
-            merge_form, 0, "Video 1", self.first_video_var, self.choose_first_video
-        )
-        self._path_row(
-            merge_form, 1, "Video 2", self.second_video_var, self.choose_second_video
-        )
-        ttk.Label(merge_form, text="Output name").grid(
-            row=2, column=0, sticky="w", pady=3
-        )
-        ttk.Entry(merge_form, textvariable=self.merge_output_name_var).grid(
-            row=2, column=1, sticky="ew", pady=3
-        )
-        self._path_row(
-            merge_form,
-            3,
-            "Output directory",
-            self.merge_output_directory_var,
-            self.choose_merge_output_directory,
-            kind="directory",
-        )
-        self.merge_button = ttk.Button(
-            merge_form, text="Add to queue", command=self.submit_merge_job
-        )
-        self.merge_button.grid(row=4, column=3, sticky="e", pady=(8, 0))
 
         queue_box = ttk.LabelFrame(outer, text="Queue", padding=8)
         queue_box.pack(fill="both", expand=True)
         columns = (
-            "type",
-            "output",
-            "source",
-            "files",
+            "lesson",
+            "pptx",
+            "script",
             "status",
             "stage",
+            "progress",
+            "artifact",
             "result",
         )
+        headings = {
+            "lesson": "Lesson",
+            "pptx": "PPTX",
+            "script": "TXT",
+            "status": "Status",
+            "stage": "Stage",
+            "progress": "Slide",
+            "artifact": "Artifact folder",
+            "result": "Result / error",
+        }
         self.tree = ttk.Treeview(
             queue_box, columns=columns, show="headings", selectmode="browse"
         )
-        headings = {
-            "type": "Type",
-            "output": "Output",
-            "source": "Source",
-            "files": "Files",
-            "status": "Status",
-            "stage": "Stage",
-            "result": "Result / error",
-        }
-        widths = {
-            "type": 70,
-            "output": 150,
-            "source": 240,
-            "files": 150,
-            "status": 90,
-            "stage": 130,
-            "result": 320,
-        }
         for name in columns:
             self.tree.heading(name, text=headings[name])
-            self.tree.column(name, width=widths[name], minwidth=70)
+            self.tree.column(name, width=100 if name != "result" else 260, minwidth=70)
         scroll_y = ttk.Scrollbar(queue_box, orient="vertical", command=self.tree.yview)
-        scroll_x = ttk.Scrollbar(
-            queue_box, orient="horizontal", command=self.tree.xview
-        )
+        scroll_x = ttk.Scrollbar(queue_box, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
-        self.tree.grid(row=0, column=0, columnspan=4, sticky="nsew")
-        scroll_y.grid(row=0, column=4, sticky="ns")
-        scroll_x.grid(row=1, column=0, columnspan=4, sticky="ew")
+        self.tree.grid(row=0, column=0, columnspan=5, sticky="nsew")
+        scroll_y.grid(row=0, column=5, sticky="ns")
+        scroll_x.grid(row=1, column=0, columnspan=5, sticky="ew")
         queue_box.rowconfigure(0, weight=1)
         queue_box.columnconfigure(0, weight=1)
         ttk.Button(queue_box, text="Retry", command=self.retry_selected).grid(
             row=2, column=0, sticky="w", pady=(8, 0)
         )
-        ttk.Button(queue_box, text="Remove waiting", command=self.remove_selected).grid(
+        ttk.Button(queue_box, text="Cancel active", command=self.cancel_selected).grid(
             row=2, column=1, sticky="w", pady=(8, 0)
+        )
+        ttk.Button(queue_box, text="Remove waiting", command=self.remove_selected).grid(
+            row=2, column=2, sticky="w", pady=(8, 0)
         )
         ttk.Button(
             queue_box, text="Open output folder", command=self.open_selected_folder
-        ).grid(row=2, column=2, sticky="w", pady=(8, 0))
+        ).grid(row=2, column=3, sticky="w", pady=(8, 0))
         ttk.Label(outer, textvariable=self.status_var).pack(fill="x", pady=(8, 0))
 
     def show_error(self, message: str) -> None:
@@ -404,105 +267,37 @@ class WorkflowApp:
 
     def choose_outro(self) -> None:
         self._choose_file(
-            self.outro_var, [("Videos", "*.mp4 *.mov *.mkv"), ("All files", "*.*")]
+            self.outro_var,
+            [("Videos", "*.mp4 *.mov *.mkv"), ("All files", "*.*")],
         )
-
-    def choose_source(self) -> None:
-        self._choose_file(
-            self.source_var,
-            [
-                ("Video and audio", "*.mp4 *.mov *.mkv *.mp3 *.wav *.m4a *.aac"),
-                ("All files", "*.*"),
-            ],
-        )
-
-    def choose_pptx(self) -> None:
-        self._choose_file(self.pptx_var, [("PowerPoint", "*.pptx")])
-
-    def choose_timeline(self) -> None:
-        self._choose_file(self.timeline_var, [("Timeline", "*.txt *.json")])
-
-    def choose_output_directory(self) -> None:
-        self._choose_directory(self.output_directory_var)
 
     def choose_batch_root(self) -> None:
         self._choose_directory(self.batch_root_var)
 
-    def choose_first_video(self) -> None:
-        self._choose_file(
-            self.first_video_var,
-            [("Videos", "*.mp4 *.mov *.mkv"), ("All files", "*.*")],
-        )
-
-    def choose_second_video(self) -> None:
-        self._choose_file(
-            self.second_video_var,
-            [("Videos", "*.mp4 *.mov *.mkv"), ("All files", "*.*")],
-        )
-
-    def choose_merge_output_directory(self) -> None:
-        self._choose_directory(self.merge_output_directory_var)
-
     def save_global_assets(self) -> None:
+        logo = self.logo_var.get().strip()
+        outro = self.outro_var.get().strip()
+        if not logo or not outro:
+            self.show_error("logo and outro are required")
+            return
         try:
-            logo = self.logo_var.get().strip()
-            outro = self.outro_var.get().strip()
-            self.controller.set_global_assets(
-                Path(logo) if logo else None, Path(outro) if outro else None
-            )
+            self.controller.set_global_assets(Path(logo), Path(outro))
         except (OSError, ValueError) as exc:
             self.show_error(str(exc))
             return
-        self.status_var.set("Optional assets saved")
-        self.worker.wake()
-
-    def submit_job(self) -> None:
-        try:
-            data = JobFormData.from_strings(
-                self.source_var.get(),
-                self.pptx_var.get(),
-                self.timeline_var.get(),
-                self.output_name_var.get(),
-                self.output_directory_var.get(),
-            )
-            self.controller.enqueue(
-                source_media=data.source_media,
-                pptx=data.pptx,
-                timeline=data.timeline,
-                output_name=data.output_name,
-                output_directory=data.output_directory,
-            )
-        except (OSError, ValueError) as exc:
-            self.show_error(str(exc))
-            return
-        self.status_var.set("Job added")
-        self.output_name_var.set("")
-        self.refresh_jobs()
-        self.worker.wake()
-
-    def submit_merge_job(self) -> None:
-        try:
-            data = MergeFormData.from_strings(
-                self.first_video_var.get(),
-                self.second_video_var.get(),
-                self.merge_output_name_var.get(),
-                self.merge_output_directory_var.get(),
-            )
-            self.controller.enqueue_merge(
-                first_video=data.first_video,
-                second_video=data.second_video,
-                output_name=data.output_name,
-                output_directory=data.output_directory,
-            )
-        except (OSError, ValueError) as exc:
-            self.show_error(str(exc))
-            return
-        self.status_var.set("Merge job added")
-        self.merge_output_name_var.set("")
-        self.refresh_jobs()
+        self.status_var.set("Required assets saved")
         self.worker.wake()
 
     def submit_batch_folder(self) -> None:
+        settings = self.controller.settings
+        if (
+            settings.logo is None
+            or settings.outro is None
+            or not settings.logo.is_file()
+            or not settings.outro.is_file()
+        ):
+            self.show_error("Save a valid logo and outro before scanning")
+            return
         raw_root = self.batch_root_var.get().strip()
         if not raw_root:
             self.show_error("input root is required")
@@ -512,7 +307,6 @@ class WorkflowApp:
         except OSError as exc:
             self.show_error(str(exc))
             return
-
         if result.issues:
             visible = result.issues[:20]
             lines = [f"{issue.folder}: {issue.message}" for issue in visible]
@@ -520,8 +314,7 @@ class WorkflowApp:
                 lines.append(f"... and {len(result.issues) - len(visible)} more issue(s)")
             self.show_warning("\n".join(lines))
         self.status_var.set(
-            f"Batch: {len(result.queued)} added, {len(result.skipped)} skipped, "
-            f"{len(result.issues)} issue(s)"
+            f"Batch: {len(result.queued)} added, {len(result.issues)} issue(s)"
         )
         self.refresh_jobs()
         if result.queued:
@@ -534,21 +327,7 @@ class WorkflowApp:
         present: set[str] = set()
         for position, job in enumerate(self.controller.jobs()):
             present.add(job.id)
-            result = job.error or (
-                str(job.output_path) if job.status.value == "completed" else ""
-            )
-            source = str(job.source_media)
-            if job.kind is JobKind.MERGE and job.secondary_media is not None:
-                source = f"{source}  →  {job.secondary_media}"
-            values = (
-                job.kind.value,
-                job.output_name,
-                source,
-                self._job_files_summary(job),
-                job.status.value,
-                job.stage.value if job.stage else "",
-                result,
-            )
+            values = job_row(job)
             if self.tree.exists(job.id):
                 self.tree.item(job.id, values=values)
             else:
@@ -560,62 +339,17 @@ class WorkflowApp:
         if selected and self.tree.exists(selected[0]):
             self.tree.selection_set(selected[0])
 
-    def _missing_job_paths(self, job: JobRecord) -> list[str]:
-        required: list[tuple[str, Path | None]] = [("source", job.source_media)]
-        if job.kind is JobKind.MERGE:
-            required.append(("video 2", job.secondary_media))
-        else:
-            required.extend((("PPTX", job.pptx), ("timeline", job.timeline)))
-            if job.status in {JobStatus.WAITING, JobStatus.RUNNING}:
-                settings = self.controller.settings
-                required.append(("logo", settings.logo))
-                if job.use_outro:
-                    required.append(("outro", settings.outro))
-        missing = [
-            label
-            for label, path in required
-            if path is not None and not Path(path).is_file()
-        ]
-        if not job.output_directory.is_dir():
-            missing.append("output folder")
-        return missing
-
-    def _job_files_summary(self, job: JobRecord) -> str:
-        parts: list[str] = []
-        missing = self._missing_job_paths(job)
-        if missing:
-            parts.append(f"Missing: {', '.join(missing)}")
-        if job.status is JobStatus.COMPLETED:
-            parts.append(
-                "Output ready" if job.output_path.is_file() else "Output missing"
-            )
-        elif job.output_path.exists():
-            parts.append(
-                "Will overwrite output" if job.overwrite_output else "Output exists"
-            )
-        return "; ".join(parts) or "Ready"
-
-    def _waiting_job_ready(self, job: JobRecord) -> bool:
-        return (
-            job.status is JobStatus.WAITING
-            and not self._missing_job_paths(job)
-            and (job.overwrite_output or not job.output_path.exists())
-        )
-
     def _refresh_path_indicators(self) -> None:
         for binding in self._path_bindings:
             raw = binding.variable.get().strip()
             if not raw:
-                binding.indicator.configure(
-                    text="Optional" if binding.optional else "Required",
-                    style="Path.Empty.TLabel",
-                )
+                binding.indicator.configure(text="Required", style="Path.Empty.TLabel")
                 continue
             path = Path(raw).expanduser()
             available = path.is_dir() if binding.kind == "directory" else path.is_file()
             binding.indicator.configure(
                 text="Available" if available else "Missing",
-                style=("Path.Available.TLabel" if available else "Path.Missing.TLabel"),
+                style="Path.Available.TLabel" if available else "Path.Missing.TLabel",
             )
 
     def _poll_filesystem(self) -> None:
@@ -623,22 +357,8 @@ class WorkflowApp:
             return
         self._refresh_path_indicators()
         restored = self.controller.restore_available_path_jobs()
-        jobs = self.controller.jobs()
-        current_readiness = {
-            job.id: self._waiting_job_ready(job)
-            for job in jobs
-            if job.status is JobStatus.WAITING
-        }
-        became_ready = any(
-            ready and self._waiting_readiness.get(job_id) is False
-            for job_id, ready in current_readiness.items()
-        )
-        self._waiting_readiness = current_readiness
         if restored:
-            self.status_var.set(
-                f"Restored {len(restored)} job(s) after files became available"
-            )
-        if restored or became_ready:
+            self.status_var.set(f"Restored {len(restored)} job(s)")
             self.worker.wake()
         self.refresh_jobs()
         self.root.after(1000, self._poll_filesystem)
@@ -657,6 +377,15 @@ class WorkflowApp:
         self.refresh_jobs()
         self.worker.wake()
 
+    def cancel_selected(self) -> None:
+        try:
+            job_id = self._selected_id()
+            if self.worker.current_job_id != job_id:
+                raise ValueError("selected job is not currently running")
+            self.worker.cancel_current()
+        except ValueError as exc:
+            self.show_error(str(exc))
+
     def remove_selected(self) -> None:
         try:
             self.controller.remove(self._selected_id())
@@ -669,7 +398,12 @@ class WorkflowApp:
         try:
             job_id = self._selected_id()
             job = next(job for job in self.controller.jobs() if job.id == job_id)
-            _open_directory(job.output_directory)
+            target = (
+                job.artifact_directory
+                if job.artifact_directory.is_dir()
+                else job.artifact_directory.parent
+            )
+            _open_directory(target)
         except (OSError, StopIteration, ValueError) as exc:
             self.show_error(str(exc))
 
@@ -694,10 +428,6 @@ class WorkflowApp:
         if self._closing:
             return
         self._closing = True
-        if hasattr(self, "add_button"):
-            self.add_button.configure(state="disabled")
-        if hasattr(self, "merge_button"):
-            self.merge_button.configure(state="disabled")
         if hasattr(self, "batch_button"):
             self.batch_button.configure(state="disabled")
         self.worker.stop(timeout=10)

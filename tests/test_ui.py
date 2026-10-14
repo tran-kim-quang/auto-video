@@ -1,49 +1,29 @@
 from __future__ import annotations
 
 import queue
+import runpy
 from pathlib import Path
 
 import pytest
 
-from video_workflow.job_models import GlobalSettings, JobRecord
-from video_workflow import ui as ui_module
-from video_workflow.ui import JobFormData, WorkflowApp, _open_directory
+from video_workflow import ui
+from video_workflow.folder_batch import FolderQueueResult
+from video_workflow.job_models import GlobalSettings, JobStage
+from video_workflow.json_store import JsonStore
+from video_workflow.queue_controller import QueueController
+from video_workflow.ui import WorkflowApp, _open_directory, job_row
 from video_workflow.worker import WorkerEvent
 
 
 class _Var:
-    def __init__(self, value: str = "") -> None:
+    def __init__(self, value="") -> None:
         self.value = value
 
-    def get(self) -> str:
+    def get(self):
         return self.value
 
-    def set(self, value: str) -> None:
+    def set(self, value):
         self.value = value
-
-
-class _Controller:
-    settings = GlobalSettings()
-
-    def __init__(self) -> None:
-        self.enqueued = []
-        self.globals = []
-        self.merged = []
-
-    def enqueue(self, **kwargs):
-        self.enqueued.append(kwargs)
-
-    def enqueue_merge(self, **kwargs):
-        self.merged.append(kwargs)
-
-    def set_global_assets(self, logo, outro):
-        logo = Path(logo) if logo is not None else None
-        outro = Path(outro) if outro is not None else None
-        self.globals.append((logo, outro))
-        self.settings = GlobalSettings(logo, outro)
-
-    def jobs(self):
-        return ()
 
 
 class _Worker:
@@ -51,6 +31,9 @@ class _Worker:
         self.events = queue.Queue()
         self.wakes = 0
         self.stops = 0
+        self.cancels = 0
+        self.current_job_id = None
+        self.alive = False
 
     def wake(self):
         self.wakes += 1
@@ -58,128 +41,143 @@ class _Worker:
     def stop(self, timeout=10):
         self.stops += 1
 
+    def cancel_current(self):
+        self.cancels += 1
+
     def is_alive(self):
-        return False
+        return self.alive
 
 
-def test_open_output_folder_uses_xdg_open_on_linux(tmp_path: Path, monkeypatch) -> None:
-    calls = []
-    monkeypatch.setattr("video_workflow.ui.sys.platform", "linux")
-    monkeypatch.setattr(
-        "video_workflow.ui.subprocess.Popen", lambda argv: calls.append(argv)
-    )
-    _open_directory(tmp_path)
-    assert calls == [["xdg-open", str(tmp_path)]]
+def _files(tmp_path: Path):
+    paths = {
+        name: tmp_path / filename
+        for name, filename in {
+            "logo": "logo.png",
+            "outro": "outro.mp4",
+            "pptx": "lesson.pptx",
+            "script": "lesson.txt",
+        }.items()
+    }
+    for name, path in paths.items():
+        path.write_text("Một." if name == "script" else name, encoding="utf-8")
+    return paths
 
 
-def test_open_output_folder_uses_startfile_on_windows(
-    tmp_path: Path, monkeypatch
-) -> None:
-    calls = []
-    monkeypatch.setattr("video_workflow.ui.sys.platform", "win32")
-    monkeypatch.setattr(
-        "video_workflow.ui.os.startfile", lambda path: calls.append(path), raising=False
-    )
-    _open_directory(tmp_path)
-    assert calls == [tmp_path]
-
-
-def _app(tmp_path: Path) -> WorkflowApp:
+def _app(tmp_path: Path, *, save_assets: bool = True) -> WorkflowApp:
+    files = _files(tmp_path)
     app = WorkflowApp.__new__(WorkflowApp)
-    app.controller = _Controller()
+    app.controller = QueueController(JsonStore(tmp_path / "data"))
+    if save_assets:
+        app.controller.set_global_assets(files["logo"], files["outro"])
     app.worker = _Worker()
-    app.source_var = _Var(str(tmp_path / "audio.mp3"))
-    app.pptx_var = _Var(str(tmp_path / "slides.pptx"))
-    app.timeline_var = _Var(str(tmp_path / "timeline.txt"))
-    app.output_name_var = _Var("lesson")
-    app.output_directory_var = _Var(str(tmp_path))
-    app.first_video_var = _Var(str(tmp_path / "first.mp4"))
-    app.second_video_var = _Var(str(tmp_path / "second.mp4"))
-    app.merge_output_name_var = _Var("merged")
-    app.merge_output_directory_var = _Var(str(tmp_path))
-    app.logo_var = _Var()
-    app.outro_var = _Var()
+    app.logo_var = _Var(str(files["logo"]) if save_assets else "")
+    app.outro_var = _Var(str(files["outro"]) if save_assets else "")
+    app.batch_root_var = _Var(str(tmp_path))
     app.status_var = _Var()
     app._closing = False
     app.refresh_jobs = lambda: None
     app._errors = []
-    app.show_error = lambda message: app._errors.append(message)
+    app._warnings = []
+    app.show_error = app._errors.append
+    app.show_warning = app._warnings.append
     return app
 
 
-def test_job_form_requires_all_fields_and_maps_paths(tmp_path: Path) -> None:
-    data = JobFormData.from_strings(
-        " a.mp3 ", "b.pptx", "c.txt", " lesson ", str(tmp_path)
+def test_save_assets_rejects_blank_or_missing_logo_and_outro(tmp_path: Path) -> None:
+    app = _app(tmp_path, save_assets=False)
+
+    app.save_global_assets()
+    assert app._errors and "required" in app._errors[-1]
+
+    app.logo_var.set(str(tmp_path / "missing.png"))
+    app.outro_var.set(str(tmp_path / "missing.mp4"))
+    app.save_global_assets()
+    assert "does not exist" in app._errors[-1]
+    assert app.worker.wakes == 0
+
+
+def test_batch_submit_requires_assets_then_queues_pairs_and_wakes_worker(
+    tmp_path: Path,
+) -> None:
+    app = _app(tmp_path, save_assets=False)
+    app.submit_batch_folder()
+    assert "Save a valid logo and outro" in app._errors[-1]
+
+    files = _files(tmp_path)
+    app.controller.set_global_assets(files["logo"], files["outro"])
+    app.submit_batch_folder()
+
+    assert len(app.controller.jobs()) == 1
+    assert app.controller.jobs()[0].pptx == files["pptx"]
+    assert app.worker.wakes == 1
+    assert app.status_var.get() == "Batch: 1 added, 0 issue(s)"
+
+
+def test_fixed_profile_is_displayed_read_only() -> None:
+    assert ui.FIXED_PROFILE_LABEL == "Teacher_male — 599fc048 (32 steps, GPU)"
+    assert ui.PROFILE_ENTRY_STATE == "readonly"
+
+
+def test_queue_row_shows_lesson_stage_progress_status_and_artifact_folder(
+    tmp_path: Path,
+) -> None:
+    app = _app(tmp_path)
+    files = _files(tmp_path)
+    job = app.controller.enqueue(
+        pptx=files["pptx"],
+        script=files["script"],
+        artifact_directory=tmp_path / "output" / "lesson",
+        output_name="lesson.mp4",
     )
-    assert data.source_media == Path("a.mp3")
-    assert data.output_name == "lesson"
-    with pytest.raises(ValueError, match="source media"):
-        JobFormData.from_strings("", "b", "c", "name", str(tmp_path))
+    app.controller.claim_next()
+    app.controller.set_stage(job.id, JobStage.SYNTHESIZING_AUDIO)
+    app.controller.set_progress(job.id, 1, 2)
+
+    row = job_row(app.controller.jobs()[0])
+
+    assert row[0] == "lesson"
+    assert row[3] == "running"
+    assert row[4] == "synthesizing_audio"
+    assert row[5] == "1/2"
+    assert row[6] == str(tmp_path / "output" / "lesson")
 
 
-def test_submit_enqueues_and_wakes_worker(tmp_path: Path) -> None:
+def test_retry_cancel_and_open_output_target_selected_job(
+    tmp_path: Path, monkeypatch
+) -> None:
     app = _app(tmp_path)
-    app.submit_job()
-    assert app.controller.enqueued[0]["output_name"] == "lesson"
-    assert app.controller.enqueued[0]["source_media"] == tmp_path / "audio.mp3"
-    assert app.worker.wakes == 1
+    files = _files(tmp_path)
+    job = app.controller.enqueue(
+        pptx=files["pptx"],
+        script=files["script"],
+        artifact_directory=tmp_path / "output" / "lesson",
+        output_name="lesson.mp4",
+    )
+    app.controller.claim_next()
+    app.controller.mark_failed(job.id, "failed")
+    app._selected_id = lambda: job.id
+
+    app.retry_selected()
+    assert app.controller.jobs()[0].status.value == "waiting"
+    claimed = app.controller.claim_next()
+    app.worker.current_job_id = claimed.id
+    app.cancel_selected()
+    assert app.worker.cancels == 1
+
+    opened = []
+    monkeypatch.setattr(ui, "_open_directory", lambda path: opened.append(path))
+    app.open_selected_folder()
+    assert opened == [job.artifact_directory.parent]
 
 
-def test_submit_validation_error_does_not_enqueue(tmp_path: Path) -> None:
-    app = _app(tmp_path)
-    app.source_var.set("")
-    app.submit_job()
-    assert app.controller.enqueued == []
-    assert app._errors
-
-
-def test_saving_complete_global_paths_wakes_worker(tmp_path: Path) -> None:
-    app = _app(tmp_path)
-    logo, outro = tmp_path / "logo.png", tmp_path / "outro.mp4"
-    logo.write_bytes(b"x")
-    outro.write_bytes(b"x")
-    app.logo_var.set(str(logo))
-    app.outro_var.set(str(outro))
-    app.save_global_assets()
-    assert app.controller.globals == [(logo, outro)]
-    assert app.worker.wakes == 1
-
-
-def test_saving_blank_global_assets_is_allowed_and_wakes_worker(tmp_path: Path) -> None:
-    app = _app(tmp_path)
-
-    app.save_global_assets()
-
-    assert app.controller.globals == [(None, None)]
-    assert app._errors == []
-    assert app.worker.wakes == 1
-
-
-def test_poll_events_refreshes_rows_and_close_stops_worker(tmp_path: Path) -> None:
+def test_process_events_and_close_wait_for_worker_cleanup(tmp_path: Path) -> None:
     app = _app(tmp_path)
     refreshed = []
     app.refresh_jobs = lambda: refreshed.append(True)
-    app.worker.events.put(WorkerEvent("stage", "id", "joining"))
+    app.worker.events.put(WorkerEvent("stage", "id", "synthesizing_audio"))
     app.process_worker_events()
     assert refreshed == [True]
-    assert app.status_var.get() == "joining"
-
-    class Root:
-        destroyed = False
-
-        def destroy(self):
-            self.destroyed = True
-
-    app.root = Root()
-    app.close()
-    assert app.worker.stops == 1
-    assert app.root.destroyed is True
-
-
-def test_close_waits_for_worker_cleanup_before_destroying_root(tmp_path: Path) -> None:
-    app = _app(tmp_path)
-    app.worker.alive = True
-    app.worker.is_alive = lambda: app.worker.alive
+    assert app.status_var.get() == "synthesizing_audio"
 
     class Root:
         destroyed = False
@@ -192,90 +190,42 @@ def test_close_waits_for_worker_cleanup_before_destroying_root(tmp_path: Path) -
             self.destroyed = True
 
     app.root = Root()
+    app.worker.alive = True
     app.close()
     assert app.root.destroyed is False
-    assert len(app.root.callbacks) == 1
     app.worker.alive = False
     app.root.callbacks.pop()()
     assert app.root.destroyed is True
 
 
-def test_merge_form_requires_both_videos_and_maps_paths(tmp_path: Path) -> None:
-    data = ui_module.MergeFormData.from_strings(
-        " first.mp4 ", "second.mp4", " merged ", str(tmp_path)
-    )
-
-    assert data.first_video == Path("first.mp4")
-    assert data.second_video == Path("second.mp4")
-    assert data.output_name == "merged"
-    with pytest.raises(ValueError, match="first video"):
-        ui_module.MergeFormData.from_strings("", "second.mp4", "merged", str(tmp_path))
-
-
-def test_submit_merge_enqueues_and_wakes_worker(tmp_path: Path) -> None:
-    app = _app(tmp_path)
-
-    app.submit_merge_job()
-
-    assert app.controller.merged == [
-        {
-            "first_video": tmp_path / "first.mp4",
-            "second_video": tmp_path / "second.mp4",
-            "output_name": "merged",
-            "output_directory": tmp_path,
-        }
-    ]
-    assert app.merge_output_name_var.get() == ""
-    assert app.worker.wakes == 1
+def test_ui_has_no_single_build_or_merge_workflow_symbols() -> None:
+    for name in (
+        "submit_job",
+        "submit_merge_job",
+        "choose_source",
+        "choose_timeline",
+        "choose_first_video",
+        "choose_second_video",
+    ):
+        assert not hasattr(WorkflowApp, name)
+    assert "Build slide video" not in ui.BATCH_FOLDER_GUIDE
+    assert "Merge 2 videos" not in ui.BATCH_FOLDER_GUIDE
 
 
-def test_part_1_file_status_does_not_require_global_outro(tmp_path: Path) -> None:
-    app = _app(tmp_path)
-    for name in ("source.mp4", "slides.pptx", "timeline.txt", "logo.png"):
-        (tmp_path / name).write_bytes(b"input")
-    app.controller.settings = GlobalSettings(
-        logo=tmp_path / "logo.png", outro=tmp_path / "missing-outro.mp4"
-    )
-    job = JobRecord.new(
-        source_media=tmp_path / "source.mp4",
-        pptx=tmp_path / "slides.pptx",
-        timeline=tmp_path / "timeline.txt",
-        output_name="lesson_1",
-        output_directory=tmp_path,
-        use_outro=False,
-    )
-
-    assert "outro" not in app._missing_job_paths(job)
+def test_open_output_folder_uses_platform_launcher(tmp_path: Path, monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(ui.sys, "platform", "linux")
+    monkeypatch.setattr(ui.subprocess, "Popen", lambda argv: calls.append(argv))
+    _open_directory(tmp_path)
+    assert calls == [["xdg-open", str(tmp_path)]]
 
 
-def test_waiting_batch_job_can_overwrite_an_existing_output(tmp_path: Path) -> None:
-    app = _app(tmp_path)
-    for name in ("source.mp4", "slides.pptx", "timeline.txt"):
-        (tmp_path / name).write_bytes(b"input")
-    job = JobRecord.new(
-        source_media=tmp_path / "source.mp4",
-        pptx=tmp_path / "slides.pptx",
-        timeline=tmp_path / "timeline.txt",
-        output_name="lesson_1",
-        output_directory=tmp_path,
-        overwrite_output=True,
-    )
-    job.output_path.write_bytes(b"previous-video")
+def test_main_module_launches_ui_main(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(ui, "main", lambda: calls.append(True) or 0)
 
-    assert app._waiting_job_ready(job) is True
-    assert app._job_files_summary(job) == "Will overwrite output"
+    with pytest.raises(SystemExit) as caught:
+        runpy.run_module("video_workflow.__main__", run_name="__main__")
 
-
-def test_batch_tab_guide_contains_folder_and_file_naming_example() -> None:
-    guide = ui_module.BATCH_FOLDER_GUIDE
-
-    assert "Folder lá: tên tùy ý" in guide
-    assert "demo_Test/" in guide
-    assert "TOAN7_C4_B13_T38_1.pptx" in guide
-    assert "TOAN7_C4_B13_T38_1.mp4" in guide
-    assert "timeline_slide_TOAN7_C4_B13_T38_1.txt" in guide
-    assert "TOAN7_C4_B13_T38_2.pptx" in guide
-    assert "TOAN7_C4_B13_T38_2.txt" in guide
-    assert "output/TOAN7_C4_B13_T38_2.mp4" in guide
-    assert "Outro: chỉ part 2" in guide
-    assert "Mỗi lần scan đều thêm job mới" in guide
+    assert caught.value.code == 0
+    assert calls == [True]
