@@ -4,6 +4,7 @@ from fractions import Fraction
 from pathlib import Path
 import sys
 import threading
+import wave
 from types import ModuleType
 
 import pytest
@@ -43,6 +44,25 @@ def test_probes_portrait_outro() -> None:
 def test_rejects_missing_media_file(tmp_path: Path) -> None:
     with pytest.raises(MediaProbeError, match="does not exist"):
         probe_media(tmp_path / "missing.mp4")
+
+
+def test_probes_wav_sample_rate_and_channels_without_video(tmp_path: Path) -> None:
+    wav = tmp_path / "narration.wav"
+    with wave.open(str(wav), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(16_000)
+        handle.writeframes(b"\0\0" * 8_000)
+
+    info = probe_media(wav)
+
+    assert info.has_audio is True
+    assert info.duration_ms == 500
+    assert info.audio_duration_ms == 500
+    assert info.sample_rate == 16_000
+    assert info.channels == 1
+    assert info.width is None
+    assert info.height is None
 
 
 class _FakeSlide:
