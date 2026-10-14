@@ -19,9 +19,9 @@ from .narration import (
     build_narration,
 )
 from .narration_script import load_slide_script, validate_script_slide_count
-from .probe import MediaInfo, probe_media
+from .probe import MediaInfo, MediaProbeError, probe_media
 from .slide_export import count_pptx_slides, export_slides
-from .timeline import parse_timeline, validate_timeline
+from .timeline import TimelineError, parse_timeline, validate_timeline
 from .voicestudio_client import VoiceStudioClient, VoiceStudioConfig
 
 
@@ -185,11 +185,95 @@ def _load_completed_report(
             required.append(root / str(row["slide_image"]))
         if not all(path.is_file() and path.stat().st_size > 0 for path in required):
             return None
+        _validate_retained_artifacts(root, report, request)
         final_info = probe_media(root / Path(report.output).name)
         _verify_final(final_info, report.expected_duration_ms, request.fps)
         return report
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError, WorkflowError):
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        TypeError,
+        json.JSONDecodeError,
+        MediaProbeError,
+        TimelineError,
+        WorkflowError,
+    ):
         return None
+
+
+def _validate_retained_artifacts(
+    root: Path, report: NarratedBuildReport, request: NarratedBuildRequest
+) -> None:
+    if report.slide_count <= 0 or len(report.slides) != report.slide_count:
+        raise WorkflowError("completed report has an invalid slide count")
+
+    timeline = parse_timeline(root / "timeline.json")
+    validate_timeline(
+        timeline,
+        slide_count=report.slide_count,
+        audio_duration_ms=report.total_narration_duration_ms,
+        fps=request.fps,
+    )
+    expected_timeline = [
+        (int(row["slide_id"]), int(row["start_ms"]), int(row["end_ms"]))
+        for row in report.slides
+    ]
+    actual_timeline = [
+        (cue.slide_id, cue.start_ms, cue.end_ms) for cue in timeline.slides
+    ]
+    if actual_timeline != expected_timeline:
+        raise WorkflowError("completed timeline does not match report.json")
+
+    manifest = json.loads((root / "audio-manifest.json").read_text(encoding="utf-8"))
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema_version") != 1
+        or manifest.get("config") != asdict(request.profile_config)
+        or not isinstance(manifest.get("slides"), list)
+        or len(manifest["slides"]) != report.slide_count
+    ):
+        raise WorkflowError("completed audio manifest is invalid")
+
+    for report_row, manifest_row in zip(
+        report.slides, manifest["slides"], strict=True
+    ):
+        if not isinstance(manifest_row, dict):
+            raise WorkflowError("completed audio manifest contains an invalid slide")
+        slide_id = int(report_row["slide_id"])
+        audio_relative = f"audio/slide_{slide_id:03d}.wav"
+        image_relative = f"slide-images/slide_{slide_id:03d}.png"
+        if (
+            report_row.get("audio_file") != audio_relative
+            or report_row.get("slide_image") != image_relative
+            or manifest_row.get("slide_id") != slide_id
+            or manifest_row.get("wav") != audio_relative
+            or manifest_row.get("text_sha256") != report_row.get("text_sha256")
+            or manifest_row.get("duration_ms") != report_row.get("duration_ms")
+        ):
+            raise WorkflowError("completed audio manifest does not match report.json")
+        audio_path = root / audio_relative
+        if (
+            manifest_row.get("size") != audio_path.stat().st_size
+            or manifest_row.get("content_sha256") != _sha256(audio_path)
+        ):
+            raise WorkflowError("completed narration WAV does not match its manifest")
+        audio_info = probe_media(audio_path)
+        if (
+            not audio_info.has_audio
+            or audio_info.duration_ms != int(manifest_row["duration_ms"])
+            or audio_info.sample_rate != int(manifest_row["sample_rate"])
+            or audio_info.channels != int(manifest_row["channels"])
+        ):
+            raise WorkflowError("completed narration WAV metadata is invalid")
+
+    combined_info = probe_media(root / "combined.wav")
+    if (
+        not combined_info.has_audio
+        or abs(combined_info.duration_ms - report.total_narration_duration_ms)
+        > 20 * report.slide_count
+    ):
+        raise WorkflowError("completed combined narration is invalid")
 
 
 def _publish_artifact_tree(staging: Path, destination: Path) -> None:

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import replace
+import hashlib
+import wave
+from dataclasses import asdict, replace
 from fractions import Fraction
 from pathlib import Path
 
@@ -73,7 +75,12 @@ def _fake_narration(artifact_directory: Path) -> NarrationResult:
     manifest_slides = []
     for slide_id, text, duration in ((1, "Một.", 120), (2, "Hai.", 180)):
         wav = audio / f"slide_{slide_id:03d}.wav"
-        wav.write_bytes(f"wav-{slide_id}".encode())
+        with wave.open(str(wav), "wb") as output:
+            output.setnchannels(1)
+            output.setsampwidth(2)
+            output.setframerate(8_000)
+            output.writeframes(b"\0\0" * (duration * 8))
+        content_sha256 = hashlib.sha256(wav.read_bytes()).hexdigest()
         end = cursor + duration
         timeline.append(
             {
@@ -90,10 +97,10 @@ def _fake_narration(artifact_directory: Path) -> NarrationResult:
                 "text_sha256": f"text-{slide_id}",
                 "wav": f"audio/{wav.name}",
                 "size": wav.stat().st_size,
-                "sample_rate": 16_000,
+                "sample_rate": 8_000,
                 "channels": 1,
                 "duration_ms": duration,
-                "content_sha256": f"audio-{slide_id}",
+                "content_sha256": content_sha256,
                 "generation": {"audio_id": f"id-{slide_id}"},
             }
         )
@@ -107,9 +114,9 @@ def _fake_narration(artifact_directory: Path) -> NarrationResult:
                 end_ms=end,
                 duration_ms=duration,
                 size=wav.stat().st_size,
-                sample_rate=16_000,
+                sample_rate=8_000,
                 channels=1,
-                content_sha256=f"audio-{slide_id}",
+                content_sha256=content_sha256,
                 generation_metadata={"audio_id": f"id-{slide_id}"},
             )
         )
@@ -117,13 +124,17 @@ def _fake_narration(artifact_directory: Path) -> NarrationResult:
     timeline_path = artifact_directory / "timeline.json"
     timeline_path.write_text(json.dumps(timeline), encoding="utf-8")
     combined = artifact_directory / "combined.wav"
-    combined.write_bytes(b"combined")
+    with wave.open(str(combined), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(8_000)
+        output.writeframes(b"\0\0" * (cursor * 8))
     manifest = artifact_directory / "audio-manifest.json"
     manifest.write_text(
         json.dumps(
             {
                 "schema_version": 1,
-                "config": {"profile_id": "599fc048", "steps": 32},
+                "config": asdict(VoiceStudioConfig()),
                 "slides": manifest_slides,
             }
         ),
@@ -166,6 +177,12 @@ def _patch_success(monkeypatch, request: NarratedBuildRequest):
         path = Path(path)
         if path == request.outro:
             return _media(500, width=720, height=1280)
+        if path.name == "combined.wav":
+            return replace(_media(300, width=None, height=None), sample_rate=8_000, channels=1)
+        if path.name == "slide_001.wav":
+            return replace(_media(120, width=None, height=None), sample_rate=8_000, channels=1)
+        if path.name == "slide_002.wav":
+            return replace(_media(180, width=None, height=None), sample_rate=8_000, channels=1)
         return _media(800)
 
     monkeypatch.setattr(pipeline, "build_narration", build_narration)
@@ -281,6 +298,26 @@ def test_stale_or_missing_artifact_rebuilds(
     calls = _patch_success(monkeypatch, request)
     build_narrated_video(request, client=object(), cache_root=tmp_path / "cache")
     (request.artifact_directory / missing).unlink()
+
+    build_narrated_video(request, client=object(), cache_root=tmp_path / "cache")
+
+    assert calls["narration"] == 2
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "replacement"),
+    [
+        ("timeline.json", b"[]"),
+        ("audio-manifest.json", b"not-json"),
+    ],
+)
+def test_corrupt_retained_metadata_rebuilds(
+    tmp_path: Path, monkeypatch, relative_path: str, replacement: bytes
+) -> None:
+    request = _request(tmp_path)
+    calls = _patch_success(monkeypatch, request)
+    build_narrated_video(request, client=object(), cache_root=tmp_path / "cache")
+    (request.artifact_directory / relative_path).write_bytes(replacement)
 
     build_narrated_video(request, client=object(), cache_root=tmp_path / "cache")
 
