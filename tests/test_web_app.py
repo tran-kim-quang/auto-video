@@ -218,3 +218,50 @@ def test_delete_voice_in_use_409(tmp_path: Path) -> None:
 def test_no_vtt_download_link_in_ui() -> None:
     static = Path(__file__).parents[1] / "video_workflow" / "web" / "static" / "app.js"
     assert "Tải vi.vtt" not in static.read_text(encoding="utf-8")
+
+
+def test_static_assets_served(tmp_path: Path) -> None:
+    client, _layout, _scheduler = _client(tmp_path)
+
+    assert client.get("/static/app.js").status_code == 200
+    assert client.get("/static/styles.css").status_code == 200
+
+
+def test_stage_labels_present() -> None:
+    source = (
+        Path(__file__).parents[1]
+        / "video_workflow"
+        / "web"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    for label in (
+        "Đang chờ",
+        "Chờ GPU",
+        "Chờ xuất slide",
+        "Kiểm tra đầu vào",
+        "Sinh giọng",
+        "Ghép audio",
+        "Xuất slide",
+        "Render video",
+        "Chuẩn bị outro",
+        "Ghép outro",
+        "Kiểm tra video",
+        "Đóng gói",
+        "Tạo phụ đề",
+        "Lưu kết quả",
+    ):
+        assert label in source
+
+
+def test_default_preview_text_present() -> None:
+    source = (
+        Path(__file__).parents[1]
+        / "video_workflow"
+        / "web"
+        / "static"
+        / "index.html"
+    ).read_text(encoding="utf-8")
+
+    assert "Cho tam giác ABC vuông tại A, tính độ dài cạnh BC." in source

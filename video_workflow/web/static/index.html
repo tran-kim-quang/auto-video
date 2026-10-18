@@ -1,8 +1,28 @@
 <!doctype html>
 <html lang="vi">
-<head><meta charset="utf-8"><title>Pyramid Video</title></head>
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pyramid Video</title><link rel="stylesheet" href="/static/styles.css">
+</head>
 <body>
-  <nav><button>Tạo video</button><button>Giọng đọc</button><button>Hàng đợi</button></nav>
+  <div id="status-banner" class="status-banner" hidden></div>
+  <header class="masthead"><div><p class="product-mark">PYRAMID / VIDEO DESK</p><h1>Tạo bài giảng, giữ nhịp lớp học.</h1></div><div id="service-lights" class="service-lights"></div></header>
+  <main class="workspace">
+    <nav class="tabs"><button class="tab active" data-tab="create">Tạo video</button><button class="tab" data-tab="voices">Giọng đọc</button><button class="tab" data-tab="queue">Hàng đợi</button></nav>
+    <section id="tab-create" class="panel active">
+      <div class="panel-heading"><div><h2>Đưa cả cây bài học vào</h2><p>Mỗi folder lá cần đúng một PPTX và một TXT.</p></div><p id="assets-line" class="asset-line">Logo/Outro: đang kiểm tra…</p></div>
+      <div id="drop-zone" class="drop-zone" tabindex="0"><div class="drop-symbol">＋</div><strong>Thả folder vào đây</strong><span>hoặc</span><label class="button secondary">Chọn folder<input id="folder-input" type="file" webkitdirectory multiple hidden></label></div>
+      <div id="upload-progress-wrap" class="progress-wrap" hidden><div id="upload-progress" class="progress-bar"></div></div><p id="create-guidance" class="guidance"></p>
+      <div class="split-layout"><aside><h3>Batch đã upload</h3><div id="batch-list" class="stack-list empty">Chưa có batch.</div></aside><div><div class="toolbar"><label>Giọng đọc<select id="voice-select"></select></label></div><div id="leaf-list" class="leaf-list empty">Chọn hoặc upload một batch để xem bài.</div><button id="create-jobs" class="button primary" disabled>Tạo 0 video · ước tính ~0 phút</button></div></div>
+    </section>
+    <section id="tab-voices" class="panel">
+      <div class="panel-heading"><div><h2>Thư viện giọng đọc</h2><p>Nghe thử trước khi dùng cho cả batch.</p></div></div>
+      <label class="wide-field">Câu nghe thử<input id="preview-text" value="Cho tam giác ABC vuông tại A, tính độ dài cạnh BC."></label><div id="voice-list" class="voice-grid"></div>
+      <form id="voice-form" class="voice-form"><h3>Thêm giọng mới</h3><label>Tên giọng<input name="name" required></label><label class="audio-drop">File ghi âm<input id="voice-audio" name="audio" type="file" accept=".wav,.mp3,.m4a" required></label><label>Lời nói trong file (không bắt buộc)<textarea name="ref_text" rows="3"></textarea></label><p class="hint">Nên 5–15 giây, một người nói, không nhạc nền</p><p id="audio-warning" class="warning" hidden>File dài hơn 20 giây: VoiceStudio sẽ bỏ qua lời nói đã nhập và tự chọn một đoạn</p><p id="clone-wait" class="guidance" hidden>Đang chờ GPU rảnh để tự nhận dạng lời nói — nhập lời nói để tạo ngay</p><button class="button primary" type="submit">Tạo giọng và nghe thử</button></form><audio id="audio-player" controls hidden></audio>
+    </section>
+    <section id="tab-queue" class="panel"><div class="panel-heading"><div><h2>Hàng đợi sản xuất</h2><p>Tối đa ba bài cùng chạy; GPU được chia theo từng lượt.</p></div></div><div id="queue-list" class="queue-list empty">Chưa có bài trong hàng đợi.</div></section>
+  </main>
+  <dialog id="video-modal"><button id="close-video" class="modal-close">×</button><video id="video-player" controls></video></dialog><div id="toast" class="toast" role="status"></div>
   <script src="/static/app.js"></script>
 </body>
 </html>
