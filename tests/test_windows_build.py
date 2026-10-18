@@ -39,6 +39,22 @@ def test_windows_build_command_creates_portable_windowed_distribution(
     assert "video_workflow.voicestudio_supervisor" in hidden
 
 
+def test_windows_web_build_uses_console_and_bundles_static(tmp_path: Path) -> None:
+    command = pyinstaller_command(tmp_path, Path(sys.executable), web=True)
+
+    assert "--console" in command
+    assert "--windowed" not in command
+    assert command[command.index("--name") + 1] == "PyramidVideoWeb"
+    assert "--add-data" in command
+    assert "video_workflow/web/static" in command[command.index("--add-data") + 1]
+    assert [
+        command[index + 1]
+        for index, value in enumerate(command[:-1])
+        if value == "--collect-submodules"
+    ].count("uvicorn") == 1
+    assert command[-1] == str(tmp_path / "web_launcher.py")
+
+
 def test_windows_build_prepares_spec_directory_before_running_pyinstaller(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -52,12 +68,8 @@ def test_windows_build_prepares_spec_directory_before_running_pyinstaller(
     def fake_run(command, *, cwd, check):
         calls.append(command)
         if "PyInstaller" in command:
-            executable = (
-                repo
-                / "dist"
-                / "PyramidVideoWorkflow"
-                / "PyramidVideoWorkflow.exe"
-            )
+            name = command[command.index("--name") + 1]
+            executable = repo / "dist" / name / f"{name}.exe"
             executable.parent.mkdir(parents=True)
             executable.write_bytes(b"exe")
 
@@ -67,4 +79,4 @@ def test_windows_build_prepares_spec_directory_before_running_pyinstaller(
 
     assert build_windows.main() == 0
     assert (repo / "build").is_dir()
-    assert len(calls) == 2
+    assert len(calls) == 3

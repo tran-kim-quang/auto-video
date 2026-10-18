@@ -47,11 +47,12 @@ def test_run_ui_without_venv_has_clear_error(tmp_path: Path) -> None:
     assert "Run ./setup.sh first" in result.stderr
 
 
-def test_pyproject_exposes_only_desktop_workflow_entrypoint() -> None:
+def test_pyproject_exposes_desktop_and_web_workflow_entrypoints() -> None:
     payload = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert payload["project"]["scripts"] == {
-        "video-workflow-ui": "video_workflow.ui:main"
+        "video-workflow-ui": "video_workflow.ui:main",
+        "video-workflow-web": "video_workflow.web.__main__:main",
     }
 
 

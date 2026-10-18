@@ -136,6 +136,22 @@ quả mới. Thư mục `output`, thư mục ẩn và staging của ứng dụng
 State, cache và log nằm trong `.workflow_data` (hoặc cạnh file EXE của bản
 Windows portable). Job đang chạy khi đóng ứng dụng trở thành `interrupted`.
 
+## Giao diện web (LAN)
+
+Chạy `run-web.sh` trên Linux hoặc `run-web.bat` trên Windows, rồi mở
+`http://localhost:8080`. Dữ liệu mặc định nằm trong `~/video_and_cc` với các
+thư mục `uploads`, `work`, `tts-cache`, `state` và `logs`.
+
+Mỗi folder lá phải chứa đúng một file `.pptx` và một file kịch bản `.txt`; hai
+file không cần trùng tên. Folder `output`, folder ẩn và file rác hệ điều hành
+được bỏ qua. Kết quả của mỗi bài gồm đúng `<tên-pptx>.mp4` và `vi.vtt` trong
+folder `output`.
+
+Để máy khác trong LAN truy cập, mở cổng TCP 8080 trong Windows Firewall. Chạy
+ứng dụng trong phiên người dùng đã đăng nhập để PowerPoint và VoiceStudio hoạt
+động; nếu cần tự khởi động, dùng Task Scheduler với trigger **At log on**.
+Không chạy ứng dụng như Windows service.
+
 ## Phát triển và kiểm tra
 
 ```bash

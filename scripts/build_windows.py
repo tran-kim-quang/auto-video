@@ -5,18 +5,20 @@ import sys
 from pathlib import Path
 
 
-def pyinstaller_command(repo_root: Path, python: Path) -> list[str]:
+def pyinstaller_command(
+    repo_root: Path, python: Path, *, web: bool = False
+) -> list[str]:
     repo_root = Path(repo_root).resolve()
-    return [
+    command = [
         str(Path(python)),
         "-m",
         "PyInstaller",
         "--noconfirm",
         "--clean",
         "--onedir",
-        "--windowed",
+        "--console" if web else "--windowed",
         "--name",
-        "PyramidVideoWorkflow",
+        "PyramidVideoWeb" if web else "PyramidVideoWorkflow",
         "--paths",
         str(repo_root),
         "--collect-submodules",
@@ -39,8 +41,18 @@ def pyinstaller_command(repo_root: Path, python: Path) -> list[str]:
         str(repo_root / "build" / "pyinstaller"),
         "--specpath",
         str(repo_root / "build"),
-        str(repo_root / "windows_launcher.py"),
     ]
+    if web:
+        command.extend(
+            [
+                "--add-data",
+                f"{repo_root / 'video_workflow/web/static'};video_workflow/web/static",
+                "--collect-submodules",
+                "uvicorn",
+            ]
+        )
+    command.append(str(repo_root / ("web_launcher.py" if web else "windows_launcher.py")))
+    return command
 
 
 def main() -> int:
@@ -61,6 +73,11 @@ def main() -> int:
             check=True,
         )
         subprocess.run(pyinstaller_command(repo_root, python), cwd=repo_root, check=True)
+        subprocess.run(
+            pyinstaller_command(repo_root, python, web=True),
+            cwd=repo_root,
+            check=True,
+        )
     except subprocess.CalledProcessError as exc:
         return exc.returncode or 1
 
@@ -68,7 +85,12 @@ def main() -> int:
     if not executable.is_file():
         print(f"Build did not create {executable}", file=sys.stderr)
         return 1
+    web_executable = repo_root / "dist" / "PyramidVideoWeb" / "PyramidVideoWeb.exe"
+    if not web_executable.is_file():
+        print(f"Build did not create {web_executable}", file=sys.stderr)
+        return 1
     print(f"Windows build ready: {executable}")
+    print(f"Windows web build ready: {web_executable}")
     return 0
 
 
