@@ -28,21 +28,37 @@ class _State:
     generate_body = WAV
     interrupt_generate = False
     form: dict[str, str]
+    files: dict[str, tuple[str, bytes, str]]
     paths: list[str]
+    methods: list[tuple[str, str]]
 
     def __init__(self) -> None:
         self.form = {}
+        self.files = {}
         self.paths = []
+        self.methods = []
 
 
-def _parse_form(content_type: str, body: bytes) -> dict[str, str]:
+def _parse_form(
+    content_type: str, body: bytes
+) -> tuple[dict[str, str], dict[str, tuple[str, bytes, str]]]:
     message = BytesParser(policy=policy.default).parsebytes(
         f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode() + body
     )
-    return {
-        part.get_param("name", header="content-disposition"): part.get_content()
-        for part in message.iter_parts()
-    }
+    fields: dict[str, str] = {}
+    files: dict[str, tuple[str, bytes, str]] = {}
+    for part in message.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        filename = part.get_filename()
+        if filename is None:
+            fields[name] = part.get_content()
+        else:
+            files[name] = (
+                filename,
+                part.get_payload(decode=True),
+                part.get_content_type(),
+            )
+    return fields, files
 
 
 @pytest.fixture
@@ -55,6 +71,15 @@ def http_stub():
 
         def do_GET(self):
             state.paths.append(self.path)
+            state.methods.append(("GET", self.path))
+            if self.path == "/profiles/abc12345/audio":
+                body = b"profile-audio"
+                self.send_response(200)
+                self.send_header("Content-Type", "audio/mpeg")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if self.path != "/profiles":
                 self.send_error(404)
                 return
@@ -67,6 +92,7 @@ def http_stub():
 
         def do_POST(self):
             state.paths.append(self.path)
+            state.methods.append(("POST", self.path))
             if self.path.startswith("/system/flush-memory"):
                 body = b'{"flushed":true,"unloaded_model":false}'
                 self.send_response(200)
@@ -77,7 +103,17 @@ def http_stub():
                 return
             length = int(self.headers.get("Content-Length", "0"))
             request_body = self.rfile.read(length)
-            state.form = _parse_form(self.headers["Content-Type"], request_body)
+            state.form, state.files = _parse_form(
+                self.headers["Content-Type"], request_body
+            )
+            if self.path == "/profiles":
+                body = json.dumps({"id": "abc12345", "name": "Cô Lan"}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             body = state.generate_body
             self.send_response(state.generate_status)
             self.send_header("Content-Type", state.generate_content_type)
@@ -92,6 +128,15 @@ def http_stub():
             self.wfile.write(body)
             if state.interrupt_generate:
                 self.close_connection = True
+
+        def do_DELETE(self):
+            state.paths.append(self.path)
+            state.methods.append(("DELETE", self.path))
+            if self.path != "/profiles/abc12345":
+                self.send_error(404)
+                return
+            self.send_response(204)
+            self.end_headers()
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -266,3 +311,49 @@ def test_profile_json_is_bounded_before_parsing(http_stub) -> None:
 
     with pytest.raises(VoiceStudioError, match="too large"):
         VoiceStudioClient(http_stub.url).list_profiles()
+
+
+def test_list_profile_records_returns_original_dicts(http_stub) -> None:
+    records = VoiceStudioClient(http_stub.url).list_profile_records()
+
+    assert records == http_stub.profiles
+
+
+def test_create_profile_sends_clone_form(http_stub) -> None:
+    result = VoiceStudioClient(http_stub.url).create_profile(
+        name="Cô Lan",
+        audio=b"reference-audio",
+        filename="co-lan.mp3",
+        ref_text="Xin chào các em",
+    )
+
+    assert result == {"id": "abc12345", "name": "Cô Lan"}
+    assert http_stub.form == {
+        "name": "Cô Lan",
+        "ref_text": "Xin chào các em",
+        "language": "Vietnamese",
+        "kind": "clone",
+    }
+    assert http_stub.files == {
+        "ref_audio": ("co-lan.mp3", b"reference-audio", "application/octet-stream")
+    }
+
+
+def test_delete_profile_calls_delete(http_stub) -> None:
+    VoiceStudioClient(http_stub.url).delete_profile("abc12345")
+
+    assert http_stub.methods[-1] == ("DELETE", "/profiles/abc12345")
+
+
+def test_fetch_profile_audio_returns_bytes_and_type(http_stub) -> None:
+    audio, content_type = VoiceStudioClient(http_stub.url).fetch_profile_audio(
+        "abc12345"
+    )
+
+    assert audio == b"profile-audio"
+    assert content_type == "audio/mpeg"
+
+
+def test_profile_http_error_raises_voicestudio_error(http_stub) -> None:
+    with pytest.raises(VoiceStudioError, match="HTTP 404"):
+        VoiceStudioClient(http_stub.url).fetch_profile_audio("missing")
