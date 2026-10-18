@@ -27,6 +27,7 @@ class VoiceStudioConfig:
     language: str = "Vietnamese"
     steps: int = 32
     seed: int = 42
+    speed: float = 0.9
     max_chunk_chars: int = 300
     postprocess: bool = True
     crossfade_ms: int = 50
@@ -37,6 +38,8 @@ class VoiceStudioConfig:
             raise ValueError("VoiceStudio API URL and profile ID are required")
         if self.steps <= 0 or self.max_chunk_chars <= 0:
             raise ValueError("steps and max_chunk_chars must be positive")
+        if self.speed <= 0:
+            raise ValueError("speed must be positive")
         if not 0 <= self.crossfade_ms <= 1000:
             raise ValueError("crossfade_ms must be between 0 and 1000")
 
@@ -198,6 +201,7 @@ class VoiceStudioClient:
             "language": config.language,
             "num_step": str(config.steps),
             "seed": str(config.seed),
+            "speed": str(config.speed),
             "max_chunk_chars": str(config.max_chunk_chars),
             "postprocess_output": str(config.postprocess).lower(),
             "crossfade_ms": str(config.crossfade_ms),

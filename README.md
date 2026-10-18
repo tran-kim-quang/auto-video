@@ -39,7 +39,7 @@ Số đoạn narration phải bằng đúng số slide và mọi đoạn phải 
 Workflow sử dụng profile cố định `Teacher_male`, ID mặc định `599fc048`:
 
 - engine `omnivoice`, ngôn ngữ `Vietnamese`;
-- 32 bước, seed 42;
+- 32 bước, seed 42, tốc độ đọc 0.9;
 - chunk tối đa 300 ký tự, post-processing bật, crossfade 50 ms;
 - inference qua GPU; không tự hạ xuống 8 bước, CPU hoặc profile khác.
 
