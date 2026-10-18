@@ -209,7 +209,12 @@ API VoiceStudio dùng (đường dẫn backend: `~/.config/VoiceStudio/runtime/p
 | Nghe thử câu | `POST /generate` với `profile_id` + config hiện hành | Trả WAV, phát ngay trên trang |
 
 - **Giọng mặc định** lưu trong `state/` của tool (không phải của VoiceStudio). Ban đầu là `599fc048` (`Teacher_male`). Không cho xoá giọng đang là mặc định **[quyết định của người viết spec]**.
-- Gợi ý trên form: file 5–15 giây, một người nói, không nhạc nền. Nếu file > 20 giây, hiển thị cảnh báo: VoiceStudio sẽ bỏ qua lời nói đã nhập và tự chọn một đoạn.
+- **Giới hạn độ dài file ghi âm mẫu (chủ dự án duyệt 2026-10-19):** bước mã hoá giọng mẫu của VoiceStudio chạy fp32 trên cả clip, VRAM cần ≈ **1,9 GB + 0,3 GB × số giây** (đo trên RTX 3050: 5 s → 3,38 GB, 8 s → 4,27 GB, 10 s → OOM). Vì vậy:
+  - Cấu hình `--max-reference-seconds`, mặc định **7** giây (máy 6 GB); máy Quadro có thể nâng theo công thức trên.
+  - Server đo độ dài bằng `probe_media` và từ chối file dài hơn với thông báo: `File ghi âm dài {X} giây, tối đa {Y} giây trên máy này — hãy cắt ngắn và nhập đúng lời nói của đoạn đó`. Tool **không tự cắt** file (lời nói đã nhập sẽ không còn khớp).
+  - Gợi ý trên form: `Nên 3–{Y} giây, một người nói, không nhạc nền, nhập đúng lời nói trong file`; trang cảnh báo ngay khi chọn file dài hơn `{Y}` giây.
+  - Giới hạn này chỉ áp dụng cho file mẫu khi nhân bản giọng; độ dài video bài giảng không bị ảnh hưởng.
+- **Hạn chế đã biết trên máy 6 GB:** tạo giọng với lời nói để trống cần model nhận dạng giọng nói chạy cùng model sinh giọng trên GPU và thất bại trên card 6 GB; ghi rõ trong tài liệu nghiệm thu.
 - Tạo xong → tự đọc một câu mẫu bằng giọng mới để nghe ngay.
 - **Lời nói để trống và nguy cơ OOM [quyết định của người viết spec]:** khi `ref_text` rỗng, `POST /profiles` gọi `services/asr_backend.transcribe_reference` của VoiceStudio, nạp thêm một model nhận dạng giọng nói (ưu tiên CUDA) bên cạnh model TTS. Vì vậy:
   - Có nhập lời nói → yêu cầu tạo giọng được **ưu tiên** như nghe thử (chen giữa hai request slide, §11).
@@ -281,7 +286,7 @@ API VoiceStudio dùng (đường dẫn backend: `~/.config/VoiceStudio/runtime/p
 4. Mỗi folder lá có `output/` chứa **đúng** `<stem>.mp4` và `vi.vtt`; video đạt các kiểm tra hiện có (1280×720, 24 fps, H.264/AAC, độ dài khớp).
 5. `vi.vtt` hợp lệ WebVTT, định dạng như §9, ranh giới slide trùng `start_ms`/`end_ms` trong `report.json`, không có cue sau thời điểm bắt đầu outro; xem trên trang thấy phụ đề chạy khớp lời. Trang không có nút tải `vi.vtt`.
 5b. Từ một máy khác trong LAN: tải 1 video riêng lẻ; với batch 2 bài, tải "Tất cả video (.zip)" → zip mở được, chứa đúng 2 file `.mp4` theo đường dẫn tương đối, không có `vi.vtt`.
-6. Tab Giọng đọc: upload file ghi âm ~10 giây → giọng mới xuất hiện trong danh sách, tự đọc câu mẫu; nghe thử câu tuỳ ý; đặt làm mặc định; tạo 1 video bằng giọng mới thành công; xoá giọng không phải mặc định.
+6. Tab Giọng đọc: upload file ghi âm ~6 giây kèm lời nói (file dài hơn giới hạn bị từ chối với thông báo tiếng Việt) → giọng mới xuất hiện trong danh sách, tự đọc câu mẫu; nghe thử câu tuỳ ý; đặt làm mặc định; tạo 1 video bằng giọng mới thành công; xoá giọng không phải mặc định.
 7. Trong lúc một job đang sinh giọng, bấm "Nghe thử câu" → có audio trong vòng ~1 request slide.
 8. Huỷ một job đang chạy → `output/` cũ (nếu có) còn nguyên; Thử lại chạy được.
 9. Tắt server giữa chừng rồi bật lại → job đang chạy chuyển "bị gián đoạn", thử lại được.
