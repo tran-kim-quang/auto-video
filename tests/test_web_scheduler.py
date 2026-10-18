@@ -129,6 +129,31 @@ def test_recover_marks_running_interrupted(tmp_path: Path) -> None:
     assert scheduler.jobs()[0].error == "Máy chủ đã khởi động lại khi đang xử lý"
 
 
+def test_stop_interrupts_running_jobs(tmp_path: Path) -> None:
+    release = threading.Event()
+
+    def run(job, cancel, update):
+        while not cancel.is_set() and not release.wait(0.01):
+            pass
+        if cancel.is_set():
+            raise WorkflowCancelled("server stopping")
+        return RunResult(Path("/video.mp4"), 1.0)
+
+    store = WebStore(tmp_path)
+    scheduler = JobScheduler(store, run)
+    scheduler.enqueue("batch", [("leaf", 10)], "voice")
+    scheduler.start()
+    _wait(lambda: scheduler.jobs()[0].status is JobStatus.RUNNING)
+
+    try:
+        scheduler.stop(timeout=0.2)
+        assert scheduler.jobs()[0].status is JobStatus.INTERRUPTED
+        assert WebStore(tmp_path).load_jobs()[0].status is JobStatus.INTERRUPTED
+    finally:
+        release.set()
+        scheduler.stop()
+
+
 def test_retry_only_failed_or_interrupted(tmp_path: Path) -> None:
     store = WebStore(tmp_path)
     completed = replace(

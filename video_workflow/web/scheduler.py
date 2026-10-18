@@ -69,6 +69,8 @@ class JobScheduler:
         deadline = time.monotonic() + timeout
         with self._condition:
             self._stopping = True
+            for cancel_event in self._cancel_events.values():
+                cancel_event.set()
             self._condition.notify_all()
             dispatcher = self._dispatcher
         if dispatcher is not None:
