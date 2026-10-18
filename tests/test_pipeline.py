@@ -4,6 +4,7 @@ import json
 import os
 import hashlib
 import wave
+from contextlib import contextmanager
 from dataclasses import asdict, replace
 from fractions import Fraction
 from pathlib import Path
@@ -243,6 +244,81 @@ def test_logo_is_on_lecture_and_outro_is_appended_exactly_once(
     assert (image_count, span_count) == (2, 2)
     assert calls["normalize"] == 1
     assert calls["join"] == 1
+
+
+def test_guards_wrap_synthesis_and_export(tmp_path: Path, monkeypatch) -> None:
+    request = _request(tmp_path)
+    _patch_success(monkeypatch, request)
+    events: list[str] = []
+    patched_narration = pipeline.build_narration
+    patched_export = pipeline.export_slides
+
+    def narration(*args, **kwargs):
+        events.append("narration")
+        return patched_narration(*args, **kwargs)
+
+    def export(*args, **kwargs):
+        events.append("export")
+        return patched_export(*args, **kwargs)
+
+    @contextmanager
+    def synthesis_guard():
+        events.append("enter_synth")
+        try:
+            yield
+        finally:
+            events.append("exit_synth")
+
+    @contextmanager
+    def export_guard():
+        events.append("enter_export")
+        try:
+            yield
+        finally:
+            events.append("exit_export")
+
+    monkeypatch.setattr(pipeline, "build_narration", narration)
+    monkeypatch.setattr(pipeline, "export_slides", export)
+
+    build_narrated_video(
+        request,
+        client=object(),
+        cache_root=tmp_path / "cache",
+        on_stage=lambda stage: events.append(f"stage:{stage}"),
+        synthesis_guard=synthesis_guard,
+        export_guard=export_guard,
+    )
+
+    relevant = {
+        "enter_synth",
+        "stage:synthesizing_audio",
+        "narration",
+        "exit_synth",
+        "enter_export",
+        "stage:exporting_slides",
+        "export",
+        "exit_export",
+    }
+    assert [event for event in events if event in relevant] == [
+        "enter_synth",
+        "stage:synthesizing_audio",
+        "narration",
+        "exit_synth",
+        "enter_export",
+        "stage:exporting_slides",
+        "export",
+        "exit_export",
+    ]
+
+
+def test_guards_default_none_keeps_behavior(tmp_path: Path, monkeypatch) -> None:
+    request = _request(tmp_path)
+    calls = _patch_success(monkeypatch, request)
+
+    build_narrated_video(request, client=object(), cache_root=tmp_path / "cache")
+
+    assert calls["narration"] == 1
+    assert len(calls["render"]) == 1
 
 
 def test_report_contains_input_hashes_profile_settings_slide_times_and_checks(

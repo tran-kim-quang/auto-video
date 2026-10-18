@@ -8,6 +8,7 @@ import tempfile
 import threading
 import uuid
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -344,6 +345,8 @@ def build_narrated_video(
     on_progress: Callable[[int, int], None] | None = None,
     cancel_event: threading.Event | None = None,
     log_path: Path | None = None,
+    synthesis_guard: Callable[[], AbstractContextManager[None]] | None = None,
+    export_guard: Callable[[], AbstractContextManager[None]] | None = None,
 ) -> NarratedBuildReport:
     request = NarratedBuildRequest(
         pptx=Path(request.pptx),
@@ -391,17 +394,18 @@ def build_narrated_video(
             )
         )
         cache_key = hashlib.sha256(str(request.pptx.resolve()).encode()).hexdigest()[:16]
-        stage("synthesizing_audio")
-        narration = build_narration(
-            segments,
-            client,
-            staging,
-            Path(cache_root) / f"{request.pptx.stem}-{cache_key}",
-            request.profile_config,
-            on_progress=on_progress,
-            cancel_event=cancel_event,
-            log_path=log_path,
-        )
+        with (synthesis_guard or nullcontext)():
+            stage("synthesizing_audio")
+            narration = build_narration(
+                segments,
+                client,
+                staging,
+                Path(cache_root) / f"{request.pptx.stem}-{cache_key}",
+                request.profile_config,
+                on_progress=on_progress,
+                cancel_event=cancel_event,
+                log_path=log_path,
+            )
         stage("assembling_narration")
         timeline = parse_timeline(narration.timeline_path)
         spans = validate_timeline(
@@ -410,15 +414,16 @@ def build_narrated_video(
             audio_duration_ms=narration.total_duration_ms,
             fps=request.fps,
         )
-        stage("exporting_slides")
-        images = export_slides(
-            request.pptx,
-            [span.slide_id for span in spans],
-            staging / "slide-images",
-            width=1280,
-            height=720,
-            cancel_event=cancel_event,
-        )
+        with (export_guard or nullcontext)():
+            stage("exporting_slides")
+            images = export_slides(
+                request.pptx,
+                [span.slide_id for span in spans],
+                staging / "slide-images",
+                width=1280,
+                height=720,
+                cancel_event=cancel_event,
+            )
         check_cancelled()
         lecture = staging / ".lecture.mp4"
         stage("rendering_lecture")
