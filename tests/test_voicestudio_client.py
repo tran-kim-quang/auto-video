@@ -122,7 +122,7 @@ def test_generate_sends_literal_semicolons_and_fixed_quality(
         "language": "Vietnamese",
         "num_step": "32",
         "seed": "42",
-        "max_chunk_chars": "150",
+        "max_chunk_chars": "300",
         "postprocess_output": "true",
         "crossfade_ms": "50",
     }

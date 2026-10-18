@@ -27,7 +27,7 @@ class VoiceStudioConfig:
     language: str = "Vietnamese"
     steps: int = 32
     seed: int = 42
-    max_chunk_chars: int = 150
+    max_chunk_chars: int = 300
     postprocess: bool = True
     crossfade_ms: int = 50
     config_version: str = "tts-v1"

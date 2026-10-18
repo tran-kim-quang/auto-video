@@ -40,7 +40,7 @@ Workflow sử dụng profile cố định `Teacher_male`, ID mặc định `599f
 
 - engine `omnivoice`, ngôn ngữ `Vietnamese`;
 - 32 bước, seed 42;
-- chunk tối đa 150 ký tự, post-processing bật, crossfade 50 ms;
+- chunk tối đa 300 ký tự, post-processing bật, crossfade 50 ms;
 - inference qua GPU; không tự hạ xuống 8 bước, CPU hoặc profile khác.
 
 API mặc định là `http://127.0.0.1:3900`. Nếu API chưa chạy, ứng dụng tìm
