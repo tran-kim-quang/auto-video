@@ -62,6 +62,11 @@ def test_parse_args_defaults() -> None:
     )
 
 
+def test_parse_args_max_reference_seconds_default() -> None:
+    assert parse_args([]).max_reference_seconds == 7.0
+    assert parse_args(["--max-reference-seconds", "6.5"]).max_reference_seconds == 6.5
+
+
 def test_lan_urls_excludes_loopback() -> None:
     assert all("127." not in url for url in lan_urls(8080))
 
@@ -86,3 +91,19 @@ def test_build_status_ready_requires_existing_assets_and_services(
     assert status["ready"] is True
     assert status["logo"] == "logo.png"
     assert status["outro"] == "outro.mp4"
+
+
+def test_build_status_includes_max_reference_seconds(tmp_path: Path) -> None:
+    settings = GlobalSettings(
+        logo=tmp_path / "missing.png",
+        outro=tmp_path / "missing.mp4",
+    )
+
+    status = build_status(
+        settings,
+        lambda: True,
+        8080,
+        max_reference_seconds=6.5,
+    )
+
+    assert status["max_reference_seconds"] == 6.5

@@ -11,6 +11,7 @@ from typing import Any
 
 from ..job_models import GlobalSettings
 from ..json_store import JsonStore
+from .voices import DEFAULT_MAX_REFERENCE_SECONDS
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +93,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--outro", type=Path)
     parser.add_argument("--max-active", type=int, default=3)
     parser.add_argument("--gpu-slots", type=int, default=1)
+    parser.add_argument(
+        "--max-reference-seconds",
+        type=float,
+        default=DEFAULT_MAX_REFERENCE_SECONDS,
+    )
     return parser.parse_args(argv)
 
 
@@ -99,6 +105,8 @@ def build_status(
     settings: GlobalSettings,
     voicestudio_ok: Callable[[], bool],
     port: int,
+    *,
+    max_reference_seconds: float = DEFAULT_MAX_REFERENCE_SECONDS,
 ) -> dict[str, Any]:
     ffmpeg = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
     slide_export = True if sys.platform == "win32" else bool(
@@ -115,4 +123,5 @@ def build_status(
         "outro": Path(settings.outro).name if settings.outro is not None else None,
         "ready": bool(logo_ok and outro_ok and ffmpeg and voice_ok),
         "lan_urls": lan_urls(port),
+        "max_reference_seconds": float(max_reference_seconds),
     }

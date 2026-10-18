@@ -4,10 +4,12 @@ import threading
 import time
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from video_workflow.job_models import JobStatus
+from video_workflow.probe import MediaProbeError
 from video_workflow.voicestudio_client import VoiceStudioConfig
 from video_workflow.web.gpu import GpuArbiter
 from video_workflow.web.state import WebJob, WebStore
@@ -53,7 +55,15 @@ class _Client:
         return object()
 
 
-def _service(tmp_path: Path, client: _Client, jobs=(), arbiter=None):
+def _service(
+    tmp_path: Path,
+    client: _Client,
+    jobs=(),
+    arbiter=None,
+    *,
+    max_reference_seconds=7.0,
+    probe=None,
+):
     store = WebStore(tmp_path / "state")
     store.set_default_voice("default")
     return VoiceService(
@@ -62,6 +72,8 @@ def _service(tmp_path: Path, client: _Client, jobs=(), arbiter=None):
         store=store,
         config=VoiceStudioConfig,
         active_jobs=lambda: jobs,
+        max_reference_seconds=max_reference_seconds,
+        probe=probe or (lambda _path: SimpleNamespace(duration_ms=7000)),
     )
 
 
@@ -150,6 +162,80 @@ def test_create_without_transcript_waits_for_turn_and_flushes(tmp_path: Path) ->
 def test_create_validation_messages(tmp_path: Path, kwargs, message: str) -> None:
     with pytest.raises(VoiceInputError, match=message):
         _service(tmp_path, _Client()).create(ref_text="text", **kwargs)
+
+
+def test_create_rejects_reference_longer_than_limit(tmp_path: Path) -> None:
+    client = _Client()
+    service = _service(
+        tmp_path,
+        client,
+        max_reference_seconds=7,
+        probe=lambda _path: SimpleNamespace(duration_ms=10000),
+    )
+
+    with pytest.raises(VoiceInputError) as exc_info:
+        service.create(
+            name="Cô Lan",
+            audio=b"audio",
+            filename="lan.wav",
+            ref_text="xin chào",
+        )
+
+    assert str(exc_info.value) == (
+        "File ghi âm dài 10.0 giây, tối đa 7 giây trên máy này — "
+        "hãy cắt ngắn và nhập đúng lời nói của đoạn đó"
+    )
+    assert client.created == []
+
+
+def test_create_accepts_reference_at_limit(tmp_path: Path) -> None:
+    client = _Client()
+    probed: list[Path] = []
+
+    def probe(path: Path):
+        probed.append(path)
+        assert path.is_file()
+        return SimpleNamespace(duration_ms=7000)
+
+    service = _service(
+        tmp_path,
+        client,
+        max_reference_seconds=7,
+        probe=probe,
+    )
+
+    voice = service.create(
+        name="Cô Lan",
+        audio=b"audio",
+        filename="lan.wav",
+        ref_text="xin chào",
+    )
+
+    assert voice.id == "newvoice"
+    assert len(client.created) == 1
+    assert len(probed) == 1
+    assert probed[0].suffix == ".wav"
+    assert not probed[0].exists()
+
+
+def test_create_unreadable_audio(tmp_path: Path) -> None:
+    client = _Client()
+
+    def unreadable(_path: Path):
+        raise MediaProbeError("bad audio")
+
+    service = _service(tmp_path, client, probe=unreadable)
+
+    with pytest.raises(VoiceInputError) as exc_info:
+        service.create(
+            name="Cô Lan",
+            audio=b"audio",
+            filename="lan.wav",
+            ref_text="xin chào",
+        )
+
+    assert str(exc_info.value) == "Không đọc được file ghi âm"
+    assert client.created == []
 
 
 def test_preview_uses_profile_and_default_text(tmp_path: Path) -> None:

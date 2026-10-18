@@ -3,8 +3,10 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
+import tempfile
 
 from ..job_models import JobStatus
+from ..probe import MediaInfo, MediaProbeError, probe_media
 from ..voicestudio_client import VoiceStudioClient, VoiceStudioConfig
 from .gpu import GatedVoiceStudioClient, GpuArbiter
 from .state import WebJob, WebStore
@@ -29,6 +31,7 @@ class VoiceView:
 ALLOWED_AUDIO = {".wav", ".mp3", ".m4a"}
 MAX_AUDIO_BYTES = 20 * 1024 * 1024
 DEFAULT_PREVIEW_TEXT = "Cho tam giác ABC vuông tại A, tính độ dài cạnh BC."
+DEFAULT_MAX_REFERENCE_SECONDS = 7.0
 
 
 class VoiceService:
@@ -39,12 +42,16 @@ class VoiceService:
         store: WebStore,
         config: Callable[[], VoiceStudioConfig],
         active_jobs: Callable[[], Iterable[WebJob]],
+        max_reference_seconds: float = DEFAULT_MAX_REFERENCE_SECONDS,
+        probe: Callable[[Path], MediaInfo] = probe_media,
     ) -> None:
         self._client = client
         self._arbiter = arbiter
         self._store = store
         self._config = config
         self._active_jobs = active_jobs
+        self._max_reference_seconds = float(max_reference_seconds)
+        self._probe = probe
 
     def list_voices(self) -> list[VoiceView]:
         default = self._store.default_voice()
@@ -82,6 +89,24 @@ class VoiceService:
             raise VoiceInputError("Chỉ nhận file .wav, .mp3, .m4a")
         if len(audio) > MAX_AUDIO_BYTES:
             raise VoiceInputError("File ghi âm vượt quá 20 MB")
+
+        suffix = Path(filename).suffix
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temporary:
+            temporary.write(audio)
+            temporary_path = Path(temporary.name)
+        try:
+            try:
+                duration = self._probe(temporary_path).duration_ms / 1000
+            except MediaProbeError as exc:
+                raise VoiceInputError("Không đọc được file ghi âm") from exc
+        finally:
+            temporary_path.unlink(missing_ok=True)
+        if duration > self._max_reference_seconds:
+            raise VoiceInputError(
+                f"File ghi âm dài {duration:.1f} giây, tối đa "
+                f"{self._max_reference_seconds:g} giây trên máy này — "
+                "hãy cắt ngắn và nhập đúng lời nói của đoạn đó"
+            )
 
         client = self._client()
         clean_text = ref_text.strip()

@@ -10,11 +10,13 @@ from fastapi.testclient import TestClient
 from pptx import Presentation
 
 from video_workflow.job_models import GlobalSettings, JobStatus
+from video_workflow.voicestudio_client import VoiceStudioConfig
 from video_workflow.web.app import WebServices, create_app
 from video_workflow.web.config import WebLayout
+from video_workflow.web.gpu import GpuArbiter
 from video_workflow.web.scheduler import DuplicateJobError
 from video_workflow.web.state import WebJob, WebStore
-from video_workflow.web.voices import VoiceInUseError
+from video_workflow.web.voices import VoiceInUseError, VoiceService
 
 
 def _deck_bytes() -> bytes:
@@ -82,7 +84,7 @@ class _Voices:
             raise VoiceInUseError("Giọng đang được dùng bởi 2 bài trong hàng đợi")
 
 
-def _client(tmp_path: Path):
+def _client(tmp_path: Path, voices=None):
     layout = WebLayout(tmp_path / "data").ensure()
     store = WebStore(layout.state)
     scheduler = _Scheduler()
@@ -90,7 +92,7 @@ def _client(tmp_path: Path):
         layout=layout,
         store=store,
         scheduler=scheduler,
-        voices=_Voices(),
+        voices=voices or _Voices(),
         settings=GlobalSettings,
         status=lambda: {
             "voicestudio": True,
@@ -100,6 +102,7 @@ def _client(tmp_path: Path):
             "outro": "outro.mp4",
             "ready": True,
             "lan_urls": [],
+            "max_reference_seconds": 7.0,
         },
     )
     return TestClient(create_app(services)), layout, scheduler
@@ -254,6 +257,42 @@ def test_delete_voice_in_use_409(tmp_path: Path) -> None:
     assert "2 bài" in response.json()["detail"]
 
 
+def test_api_voice_too_long_returns_400(tmp_path: Path) -> None:
+    class ProfileClient:
+        def __init__(self) -> None:
+            self.created = []
+
+        def create_profile(self, **kwargs):
+            self.created.append(kwargs)
+            return {"id": "new", "name": kwargs["name"], "kind": "clone"}
+
+    profile_client = ProfileClient()
+    store = WebStore(tmp_path / "voice-state")
+    voices = VoiceService(
+        client=lambda: profile_client,
+        arbiter=GpuArbiter(),
+        store=store,
+        config=VoiceStudioConfig,
+        active_jobs=tuple,
+        max_reference_seconds=7,
+        probe=lambda _path: SimpleNamespace(duration_ms=10000),
+    )
+    client, _layout, _scheduler = _client(tmp_path, voices=voices)
+
+    response = client.post(
+        "/api/voices",
+        data={"name": "Cô Lan", "ref_text": "xin chào"},
+        files={"audio": ("lan.wav", b"audio", "audio/wav")},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "File ghi âm dài 10.0 giây, tối đa 7 giây trên máy này — "
+        "hãy cắt ngắn và nhập đúng lời nói của đoạn đó"
+    )
+    assert profile_client.created == []
+
+
 def test_no_vtt_download_link_in_ui() -> None:
     static = Path(__file__).parents[1] / "video_workflow" / "web" / "static" / "app.js"
     assert "Tải vi.vtt" not in static.read_text(encoding="utf-8")
@@ -304,3 +343,14 @@ def test_default_preview_text_present() -> None:
     ).read_text(encoding="utf-8")
 
     assert "Cho tam giác ABC vuông tại A, tính độ dài cạnh BC." in source
+
+
+def test_ui_hint_uses_status_limit() -> None:
+    static_dir = Path(__file__).parents[1] / "video_workflow" / "web" / "static"
+    source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (static_dir / "index.html", static_dir / "app.js")
+    )
+
+    assert "Nên 5–15 giây" not in source
+    assert "max_reference_seconds" in source

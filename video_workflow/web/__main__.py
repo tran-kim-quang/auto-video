@@ -40,6 +40,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     voices = VoiceService(
         client=lambda: supervisor.ensure_ready(), arbiter=arbiter, store=store,
         config=lambda: settings().voice_config(), active_jobs=scheduler.jobs,
+        max_reference_seconds=args.max_reference_seconds,
     )
 
     def voice_ok() -> bool:
@@ -51,12 +52,23 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     services = WebServices(
         layout=layout, store=store, scheduler=scheduler, voices=voices,
-        settings=settings, status=lambda: build_status(settings(), voice_ok, args.port),
+        settings=settings,
+        status=lambda: build_status(
+            settings(),
+            voice_ok,
+            args.port,
+            max_reference_seconds=args.max_reference_seconds,
+        ),
     )
     app = create_app(services)
     scheduler.start()
     print(f"Mở trên máy này: http://localhost:{args.port}")
-    for url in build_status(settings(), voice_ok, args.port)["lan_urls"]:
+    for url in build_status(
+        settings(),
+        voice_ok,
+        args.port,
+        max_reference_seconds=args.max_reference_seconds,
+    )["lan_urls"]:
         print(f"Mở trong mạng LAN: {url}")
     try:
         uvicorn.run(app, host=args.host, port=args.port)

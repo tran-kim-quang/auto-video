@@ -152,6 +152,12 @@ folder `output`.
 động; nếu cần tự khởi động, dùng Task Scheduler với trigger **At log on**.
 Không chạy ứng dụng như Windows service.
 
+File ghi âm mẫu để nhân bản giọng được giới hạn mặc định ở 7 giây trên máy
+6 GB VRAM. Có thể đổi bằng `./run-web.sh --max-reference-seconds N` theo dung
+lượng card; mức VRAM đo được xấp xỉ `1,9 GB + 0,3 GB × số giây`. Nên dùng đoạn
+3–7 giây và nhập đúng lời nói trong file; giới hạn này không áp dụng cho video
+bài giảng.
+
 ## Phát triển và kiểm tra
 
 ```bash
