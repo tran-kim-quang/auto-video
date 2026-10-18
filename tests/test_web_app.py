@@ -4,6 +4,7 @@ import io
 import zipfile
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 from pptx import Presentation
@@ -198,6 +199,44 @@ def test_zip_contains_only_completed_mp4(tmp_path: Path) -> None:
     from video_workflow.web.state import BatchRecord
     scheduler_batch_store = client.app.state.services.store
     scheduler_batch_store.add_batch(BatchRecord("batch", "root", "now"))
+
+    response = client.get("/api/batches/batch/videos.zip")
+
+    assert response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        assert archive.namelist() == ["root/t40/a.mp4"]
+
+
+def test_zip_stream_does_not_buffer_archive_in_bytesio(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    client, _layout, scheduler = _client(tmp_path)
+    video = tmp_path / "a.mp4"
+    video.write_bytes(b"video")
+    scheduler.items.append(
+        replace(
+            WebJob.new(
+                batch_id="batch",
+                leaf_relpath="root/t40",
+                profile_id="v",
+                script_chars=1,
+            ),
+            status=JobStatus.COMPLETED,
+            video_path=str(video),
+        )
+    )
+    from video_workflow.web.state import BatchRecord
+    client.app.state.services.store.add_batch(BatchRecord("batch", "root", "now"))
+
+    def reject_buffer(*_args, **_kwargs):
+        raise AssertionError("ZIP response must not buffer the full archive")
+
+    monkeypatch.setattr(
+        "video_workflow.web.app.io",
+        SimpleNamespace(BytesIO=reject_buffer),
+        raising=False,
+    )
 
     response = client.get("/api/batches/batch/videos.zip")
 

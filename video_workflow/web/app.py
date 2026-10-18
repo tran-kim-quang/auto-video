@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import io
-import tempfile
 import uuid
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any
@@ -31,6 +29,55 @@ class WebServices:
     voices: VoiceService
     settings: Callable[[], GlobalSettings]
     status: Callable[[], dict[str, Any]]
+
+
+class _ZipStreamWriter:
+    def __init__(self) -> None:
+        self._chunks = bytearray()
+        self._position = 0
+
+    def write(self, data: bytes) -> int:
+        self._chunks.extend(data)
+        self._position += len(data)
+        return len(data)
+
+    def tell(self) -> int:
+        return self._position
+
+    def flush(self) -> None:
+        return None
+
+    def drain(self) -> bytes:
+        chunk = bytes(self._chunks)
+        self._chunks.clear()
+        return chunk
+
+
+def _zip_chunks(entries: Sequence[tuple[Path, str]]) -> Iterator[bytes]:
+    writer = _ZipStreamWriter()
+    with zipfile.ZipFile(
+        writer,
+        "w",
+        compression=zipfile.ZIP_STORED,
+        allowZip64=True,
+    ) as archive:
+        for video_path, archive_name in entries:
+            with archive.open(archive_name, "w", force_zip64=True) as target:
+                pending = writer.drain()
+                if pending:
+                    yield pending
+                with video_path.open("rb") as source:
+                    while chunk := source.read(1024 * 1024):
+                        target.write(chunk)
+                        pending = writer.drain()
+                        if pending:
+                            yield pending
+            pending = writer.drain()
+            if pending:
+                yield pending
+    pending = writer.drain()
+    if pending:
+        yield pending
 
 
 def _value(value: Any) -> Any:
@@ -193,15 +240,21 @@ def create_app(services: WebServices) -> FastAPI:
         ]
         if not completed:
             raise HTTPException(404, "Chưa có video hoàn thành")
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
-            for job in completed:
-                video_path = Path(job.video_path)
-                archive.write(video_path, f"{job.leaf_relpath}/{video_path.name}")
+        entries = [
+            (
+                Path(job.video_path),
+                f"{job.leaf_relpath}/{Path(job.video_path).name}",
+            )
+            for job in completed
+        ]
         headers = {
             "Content-Disposition": f'attachment; filename="{batch.root_name}_{batch.id}.zip"'
         }
-        return StreamingResponse(iter([buffer.getvalue()]), media_type="application/zip", headers=headers)
+        return StreamingResponse(
+            _zip_chunks(entries),
+            media_type="application/zip",
+            headers=headers,
+        )
 
     @app.get("/api/voices")
     def voices():

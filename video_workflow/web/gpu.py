@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 from collections import deque
 from collections.abc import Iterator
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import contextmanager
 from typing import Any
 
 from ..voicestudio_client import VoiceStudioClient
