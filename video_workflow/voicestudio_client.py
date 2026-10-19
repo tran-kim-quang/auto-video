@@ -7,7 +7,7 @@ from http.client import IncompleteRead
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 
@@ -27,7 +27,8 @@ class VoiceStudioConfig:
     language: str = "Vietnamese"
     steps: int = 32
     seed: int = 42
-    max_chunk_chars: int = 150
+    speed: float = 0.9
+    max_chunk_chars: int = 300
     postprocess: bool = True
     crossfade_ms: int = 50
     config_version: str = "tts-v1"
@@ -37,6 +38,8 @@ class VoiceStudioConfig:
             raise ValueError("VoiceStudio API URL and profile ID are required")
         if self.steps <= 0 or self.max_chunk_chars <= 0:
             raise ValueError("steps and max_chunk_chars must be positive")
+        if self.speed <= 0:
+            raise ValueError("speed must be positive")
         if not 0 <= self.crossfade_ms <= 1000:
             raise ValueError("crossfade_ms must be between 0 and 1000")
 
@@ -58,15 +61,32 @@ class GenerationMetadata:
     routing_headers: dict[str, str]
 
 
-def _multipart(fields: dict[str, str]) -> tuple[bytes, str]:
+def _multipart(
+    fields: dict[str, str],
+    files: dict[str, tuple[str, bytes, str]] | None = None,
+) -> tuple[bytes, str]:
     boundary = f"----auto-video-{uuid.uuid4().hex}"
     pieces: list[bytes] = []
     for name, value in fields.items():
         pieces.extend(
             [
                 f"--{boundary}\r\n".encode(),
-                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(),
+                f'Content-Disposition: form-data; name="{name}"\r\n'.encode(),
+                b"Content-Type: text/plain; charset=utf-8\r\n\r\n",
                 value.encode("utf-8"),
+                b"\r\n",
+            ]
+        )
+    for name, (filename, payload, content_type) in (files or {}).items():
+        pieces.extend(
+            [
+                f"--{boundary}\r\n".encode(),
+                (
+                    f'Content-Disposition: form-data; name="{name}"; '
+                    f'filename="{filename}"\r\n'
+                ).encode("utf-8"),
+                f"Content-Type: {content_type}\r\n\r\n".encode(),
+                payload,
                 b"\r\n",
             ]
         )
@@ -142,10 +162,22 @@ class VoiceStudioClient:
         except (UnicodeError, json.JSONDecodeError) as exc:
             raise VoiceStudioError(f"VoiceStudio {path} returned invalid JSON") from exc
 
-    def list_profiles(self) -> tuple[VoiceProfile, ...]:
+    def _profile_http_error(self, exc: HTTPError, method: str, path: str) -> None:
+        detail = exc.read(self.max_error_bytes).decode("utf-8", errors="replace")
+        raise VoiceStudioError(
+            f"VoiceStudio {method} {path} failed with HTTP {exc.code}: {detail}"
+        ) from exc
+
+    def list_profile_records(self) -> list[dict[str, Any]]:
         payload = self._json_request("/profiles")
-        if not isinstance(payload, list):
-            raise VoiceStudioError("VoiceStudio /profiles did not return a list")
+        if not isinstance(payload, list) or any(
+            not isinstance(item, dict) for item in payload
+        ):
+            raise VoiceStudioError("VoiceStudio /profiles did not return profile records")
+        return payload
+
+    def list_profiles(self) -> tuple[VoiceProfile, ...]:
+        payload = self.list_profile_records()
         profiles: list[VoiceProfile] = []
         for item in payload:
             if not isinstance(item, dict) or not isinstance(item.get("id"), str):
@@ -158,6 +190,88 @@ class VoiceStudioClient:
                 )
             )
         return tuple(profiles)
+
+    def create_profile(
+        self,
+        *,
+        name: str,
+        audio: bytes,
+        filename: str,
+        ref_text: str,
+        language: str = "Vietnamese",
+    ) -> dict[str, Any]:
+        body, content_type = _multipart(
+            {
+                "name": name,
+                "ref_text": ref_text,
+                "language": language,
+                "kind": "clone",
+            },
+            {
+                "ref_audio": (
+                    filename,
+                    audio,
+                    "application/octet-stream",
+                )
+            },
+        )
+        path = "/profiles"
+        request = Request(
+            self._url(path),
+            data=body,
+            method="POST",
+            headers={
+                "Content-Type": content_type,
+                "Content-Length": str(len(body)),
+            },
+        )
+        try:
+            with urlopen(
+                request,
+                timeout=self.generation_timeout_seconds,
+            ) as response:
+                payload = self._bounded_read(
+                    response,
+                    self._MAX_JSON_BYTES,
+                    "JSON",
+                )
+        except HTTPError as exc:
+            self._profile_http_error(exc, "POST", path)
+            raise AssertionError("unreachable")
+        except (OSError, URLError) as exc:
+            raise VoiceStudioError(f"VoiceStudio POST {path} failed: {exc}") from exc
+        try:
+            result = json.loads(payload)
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise VoiceStudioError(
+                "VoiceStudio /profiles returned invalid JSON"
+            ) from exc
+        if not isinstance(result, dict):
+            raise VoiceStudioError("VoiceStudio /profiles returned an invalid profile")
+        return result
+
+    def delete_profile(self, profile_id: str) -> None:
+        path = f"/profiles/{quote(profile_id, safe='')}"
+        request = Request(self._url(path), method="DELETE")
+        try:
+            with urlopen(request, timeout=self.timeout_seconds):
+                return
+        except HTTPError as exc:
+            self._profile_http_error(exc, "DELETE", path)
+        except (OSError, URLError) as exc:
+            raise VoiceStudioError(f"VoiceStudio DELETE {path} failed: {exc}") from exc
+
+    def fetch_profile_audio(self, profile_id: str) -> tuple[bytes, str]:
+        path = f"/profiles/{quote(profile_id, safe='')}/audio"
+        request = Request(self._url(path), method="GET")
+        try:
+            with urlopen(request, timeout=self.timeout_seconds) as response:
+                return response.read(), response.headers.get_content_type()
+        except HTTPError as exc:
+            self._profile_http_error(exc, "GET", path)
+            raise AssertionError("unreachable")
+        except (OSError, URLError) as exc:
+            raise VoiceStudioError(f"VoiceStudio GET {path} failed: {exc}") from exc
 
     def require_profile(self, profile_id: str) -> VoiceProfile:
         for profile in self.list_profiles():
@@ -198,6 +312,7 @@ class VoiceStudioClient:
             "language": config.language,
             "num_step": str(config.steps),
             "seed": str(config.seed),
+            "speed": str(config.speed),
             "max_chunk_chars": str(config.max_chunk_chars),
             "postprocess_output": str(config.postprocess).lower(),
             "crossfade_ms": str(config.crossfade_ms),

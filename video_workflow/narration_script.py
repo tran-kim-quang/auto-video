@@ -20,10 +20,22 @@ class SlideScriptSegment:
 
 
 _SLIDE_MARKER = re.compile(r"\bslide\s+(-?\d+)\s*:", re.IGNORECASE)
+_DECORATIVE_LINE = re.compile(r"^\s*([=_*\-])\1{2,}\s*$")
+
+
+def _strip_decorative_boundaries(text: str) -> str:
+    lines = text.splitlines()
+    while lines and (not lines[0].strip() or _DECORATIVE_LINE.fullmatch(lines[0])):
+        lines.pop(0)
+    while lines and (not lines[-1].strip() or _DECORATIVE_LINE.fullmatch(lines[-1])):
+        lines.pop()
+    return "\n".join(lines)
 
 
 def _segment(slide_id: int, text: str) -> SlideScriptSegment:
-    normalized = unicodedata.normalize("NFC", text).strip()
+    normalized = _strip_decorative_boundaries(
+        unicodedata.normalize("NFC", text)
+    ).strip()
     if not normalized:
         raise ScriptError(f"slide {slide_id} has empty narration")
     return SlideScriptSegment(
@@ -48,15 +60,9 @@ def parse_slide_script_text(text: str) -> tuple[SlideScriptSegment, ...]:
     if any(slide_id <= 0 for slide_id in marker_ids):
         raise ScriptError("slide identifiers must be positive")
 
-    prefix = normalized[: markers[0].start()].strip()
     first_id = marker_ids[0]
     segments: list[SlideScriptSegment] = []
-    if first_id == 1:
-        if prefix:
-            raise ScriptError("content before explicit Slide 1 marker is not allowed")
-    elif first_id == 2:
-        segments.append(_segment(1, prefix))
-    else:
+    if first_id not in {1, 2}:
         raise ScriptError(f"expected slide 1 or slide 2, found slide {first_id}")
 
     expected_id = first_id
@@ -92,7 +98,12 @@ def validate_script_slide_count(
 ) -> None:
     if slide_count <= 0:
         raise ScriptError("PPTX must have a positive slide count")
-    if len(segments) != slide_count:
+    if not segments:
+        raise ScriptError("narration script contains no slides")
+    first_id = segments[0].slide_id
+    if first_id not in {1, 2}:
+        raise ScriptError("narration must start at slide 1 or slide 2")
+    if segments[-1].slide_id != slide_count:
         raise ScriptError(
-            f"PPTX has {slide_count} slides but script has {len(segments)} narration segments"
+            f"narration must end at slide {slide_count}, found slide {segments[-1].slide_id}"
         )

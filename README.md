@@ -39,8 +39,8 @@ Số đoạn narration phải bằng đúng số slide và mọi đoạn phải 
 Workflow sử dụng profile cố định `Teacher_male`, ID mặc định `599fc048`:
 
 - engine `omnivoice`, ngôn ngữ `Vietnamese`;
-- 32 bước, seed 42;
-- chunk tối đa 150 ký tự, post-processing bật, crossfade 50 ms;
+- 32 bước, seed 42, tốc độ đọc 0.9;
+- chunk tối đa 300 ký tự, post-processing bật, crossfade 50 ms;
 - inference qua GPU; không tự hạ xuống 8 bước, CPU hoặc profile khác.
 
 API mặc định là `http://127.0.0.1:3900`. Nếu API chưa chạy, ứng dụng tìm
@@ -135,6 +135,28 @@ quả mới. Thư mục `output`, thư mục ẩn và staging của ứng dụng
 
 State, cache và log nằm trong `.workflow_data` (hoặc cạnh file EXE của bản
 Windows portable). Job đang chạy khi đóng ứng dụng trở thành `interrupted`.
+
+## Giao diện web (LAN)
+
+Chạy `run-web.sh` trên Linux hoặc `run-web.bat` trên Windows, rồi mở
+`http://localhost:8080`. Dữ liệu mặc định nằm trong `~/video_and_cc` với các
+thư mục `uploads`, `work`, `tts-cache`, `state` và `logs`.
+
+Mỗi folder lá phải chứa đúng một file `.pptx` và một file kịch bản `.txt`; hai
+file không cần trùng tên. Folder `output`, folder ẩn và file rác hệ điều hành
+được bỏ qua. Kết quả của mỗi bài gồm đúng `<tên-pptx>.mp4` và `vi.vtt` trong
+folder `output`.
+
+Để máy khác trong LAN truy cập, mở cổng TCP 8080 trong Windows Firewall. Chạy
+ứng dụng trong phiên người dùng đã đăng nhập để PowerPoint và VoiceStudio hoạt
+động; nếu cần tự khởi động, dùng Task Scheduler với trigger **At log on**.
+Không chạy ứng dụng như Windows service.
+
+File ghi âm mẫu để nhân bản giọng được giới hạn mặc định ở 7 giây trên máy
+6 GB VRAM. Có thể đổi bằng `./run-web.sh --max-reference-seconds N` theo dung
+lượng card; mức VRAM đo được xấp xỉ `1,9 GB + 0,3 GB × số giây`. Nên dùng đoạn
+3–7 giây và nhập đúng lời nói trong file; giới hạn này không áp dụng cho video
+bài giảng.
 
 ## Phát triển và kiểm tra
 
