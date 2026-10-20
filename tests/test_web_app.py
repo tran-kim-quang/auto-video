@@ -468,3 +468,37 @@ def test_ui_hint_uses_status_limit() -> None:
 
     assert "Nên 5–15 giây" not in source
     assert "max_reference_seconds" in source
+
+
+def test_r2_upload_controls_and_results_are_present() -> None:
+    source = (
+        Path(__file__).parents[1]
+        / "video_workflow"
+        / "web"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    for text in (
+        "Kiểm tra upload",
+        "Upload lên R2",
+        "KHÔNG import",
+        "Manifest phụ đề",
+    ):
+        assert text in source
+
+
+def test_r2_controls_use_exact_output_eligibility_and_safe_copy_fallback() -> None:
+    source = (
+        Path(__file__).parents[1]
+        / "video_workflow"
+        / "web"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "upload_output_ready" in source
+    assert "l?.has_output" not in source
+    assert "new Set" in source
+    assert 'document.execCommand("copy")' in source
+    assert "upload_warning" in source
