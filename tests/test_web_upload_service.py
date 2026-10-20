@@ -133,6 +133,36 @@ def test_candidates_deduplicate_historical_completed_jobs(tmp_path: Path) -> Non
     assert [item.relpath for item in items] == [relpath]
 
 
+def test_candidates_use_video_and_vtt_paths_stored_on_job(tmp_path: Path) -> None:
+    relpath = "root/Toan6/Bài 19_X/T48_Y"
+    layout = WebLayout(tmp_path / "data").ensure()
+    video = tmp_path / "results" / "Toan6" / "Bài 19_X" / "T48_Y.mp4"
+    vtt = tmp_path / "results" / "Toan6" / "Bài 19_X" / "T48_Y" / "vi.vtt"
+    video.parent.mkdir(parents=True)
+    vtt.parent.mkdir(parents=True)
+    video.write_bytes(b"video")
+    vtt.write_text("WEBVTT\n", encoding="utf-8")
+    job = replace(
+        _job(relpath, JobStatus.COMPLETED),
+        video_path=str(video),
+        vtt_path=str(vtt),
+    )
+    service = UploadService(
+        WebStore(layout.state),
+        layout,
+        repo=lambda: tmp_path / "repo",
+        jobs=lambda: [job],
+        check=lambda _repo, _paths: {relpath: _identity(relpath)},
+        runner=lambda *_args, **_kwargs: None,
+    )
+
+    items, _checks = service.candidates("batch-1")
+
+    assert len(items) == 1
+    assert items[0].video == video
+    assert items[0].vtt == vtt
+
+
 def test_second_start_while_runner_is_active_is_busy(tmp_path: Path) -> None:
     relpath = "root/Toan6/Bài 19_X/T48_Y"
     layout = WebLayout(tmp_path / "data").ensure()

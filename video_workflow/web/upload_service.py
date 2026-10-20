@@ -95,9 +95,18 @@ class UploadService:
             check = checks.get(job.leaf_relpath)
             if check is None or check.issue is not None or check.identity is None:
                 continue
-            files = find_output_files(
-                self.layout.uploads / batch_id / job.leaf_relpath
-            )
+            if job.vtt_path is None:
+                files = find_output_files(
+                    self.layout.uploads / batch_id / job.leaf_relpath
+                )
+            else:
+                video = Path(job.video_path) if job.video_path is not None else None
+                vtt = Path(job.vtt_path)
+                files = (
+                    (video, vtt)
+                    if video is not None and video.is_file() and vtt.is_file()
+                    else None
+                )
             if files is None:
                 continue
             selected.add(job.leaf_relpath)
