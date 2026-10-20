@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import threading
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -103,6 +103,33 @@ class UploadRunRecord:
     cc_manifest: str | None
     log_path: str | None
     errors: list[str]
+    production_checked: bool = False
+    skipped_not_on_production: list[dict] = field(default_factory=list)
+    blocked: list[dict] = field(default_factory=list)
+    overwrite: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    import_manifest: str | None = None
+    import_job_id: str | None = None
+    cc_import_result: dict | None = None
+    unconfirmed: list[str] = field(default_factory=list)
+    verify_differences: list[str] = field(default_factory=list)
+    backup_path: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> UploadRunRecord:
+        values = dict(data)
+        values.setdefault("production_checked", False)
+        values.setdefault("skipped_not_on_production", [])
+        values.setdefault("blocked", [])
+        values.setdefault("overwrite", [])
+        values.setdefault("warnings", [])
+        values.setdefault("import_manifest", None)
+        values.setdefault("import_job_id", None)
+        values.setdefault("cc_import_result", None)
+        values.setdefault("unconfirmed", [])
+        values.setdefault("verify_differences", [])
+        values.setdefault("backup_path", None)
+        return cls(**values)
 
 
 class WebStore:
@@ -190,7 +217,7 @@ class WebStore:
                 runs = payload["runs"]
                 if not isinstance(runs, list):
                     raise ValueError("runs must be a list")
-                return [UploadRunRecord(**item) for item in runs]
+                return [UploadRunRecord.from_dict(item) for item in runs]
             except (KeyError, TypeError, ValueError):
                 self._preserve_invalid(self.state_dir / "uploads.json")
                 return []
