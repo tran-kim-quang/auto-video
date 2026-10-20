@@ -15,10 +15,15 @@ from video_workflow.voicestudio_client import VoiceStudioConfig
 from video_workflow.web.app import WebServices, create_app
 from video_workflow.web.config import WebLayout
 from video_workflow.web.gpu import GpuArbiter
+from video_workflow.web.production_api import ProductionApiError, ProductionAuthError
 from video_workflow.web.scheduler import DuplicateJobError
 from video_workflow.web.state import UploadRunRecord, WebJob, WebStore
 from video_workflow.web.upload_identity import UploadCheck, upload_triple
-from video_workflow.web.upload_service import UploadBusyError
+from video_workflow.web.upload_service import (
+    AdminTokenRequiredError,
+    OverwriteConfirmationRequired,
+    UploadBusyError,
+)
 from video_workflow.web.voices import VoiceInUseError, VoiceService
 
 
@@ -92,6 +97,8 @@ class _Uploads:
     def __init__(self) -> None:
         self.busy = False
         self.items: list[UploadRunRecord] = []
+        self.error: Exception | None = None
+        self.last_start: dict | None = None
 
     def checks(self, relpaths):
         result = {}
@@ -110,7 +117,22 @@ class _Uploads:
             )
         return result
 
-    def start(self, batch_id, *, dry_run):
+    def start(
+        self,
+        batch_id,
+        *,
+        dry_run,
+        admin_token=None,
+        confirm_overwrite=False,
+    ):
+        self.last_start = {
+            "batch_id": batch_id,
+            "dry_run": dry_run,
+            "admin_token": admin_token,
+            "confirm_overwrite": confirm_overwrite,
+        }
+        if self.error is not None:
+            raise self.error
         if self.busy:
             raise UploadBusyError("Đang có một lượt upload khác chạy")
         record = UploadRunRecord(
@@ -223,6 +245,103 @@ def test_upload_busy_returns_409(tmp_path: Path) -> None:
 
     assert response.status_code == 409
     assert response.json()["detail"] == "Đang có một lượt upload khác chạy"
+
+
+def test_upload_maps_admin_token_required_to_400(tmp_path: Path) -> None:
+    client, _layout, _scheduler = _client(tmp_path)
+    batch = _upload(client)
+    client.app.state.services.uploads.error = AdminTokenRequiredError()
+
+    response = client.post(
+        f"/api/batches/{batch['id']}/upload", json={"dry_run": False}
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Cần token admin để upload lên R2"
+
+
+def test_upload_maps_production_auth_error_to_401(tmp_path: Path) -> None:
+    client, _layout, _scheduler = _client(tmp_path)
+    batch = _upload(client)
+    client.app.state.services.uploads.error = ProductionAuthError(
+        "Token admin không hợp lệ hoặc đã hết hạn"
+    )
+
+    response = client.post(
+        f"/api/batches/{batch['id']}/upload",
+        json={"dry_run": True, "admin_token": "tok-bad"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Token admin không hợp lệ hoặc đã hết hạn"
+
+
+def test_upload_maps_production_api_error_to_502_and_redacts_token(
+    tmp_path: Path,
+) -> None:
+    token = "tok-SECRET"
+    client, _layout, _scheduler = _client(tmp_path)
+    batch = _upload(client)
+    client.app.state.services.uploads.error = ProductionApiError(
+        f"Backend trả HTTP 500: Bearer {token}"
+    )
+
+    response = client.post(
+        f"/api/batches/{batch['id']}/upload",
+        json={"dry_run": True, "admin_token": token},
+    )
+
+    assert response.status_code == 502
+    assert token not in response.text
+    assert "***" in response.json()["detail"]
+
+
+def test_upload_maps_overwrite_confirmation_to_structured_409(
+    tmp_path: Path,
+) -> None:
+    client, _layout, _scheduler = _client(tmp_path)
+    batch = _upload(client)
+    overwrite = ["root/Toan6/Bài 19_X/T48_Y"]
+    client.app.state.services.uploads.error = OverwriteConfirmationRequired(
+        overwrite
+    )
+
+    response = client.post(
+        f"/api/batches/{batch['id']}/upload",
+        json={"dry_run": False, "admin_token": "tok"},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": {
+            "message": "1 bài sẽ GHI ĐÈ video đang có trên web",
+            "overwrite": overwrite,
+        }
+    }
+
+
+def test_upload_success_passes_token_but_never_returns_it(tmp_path: Path) -> None:
+    token = "tok-SECRET"
+    client, _layout, _scheduler = _client(tmp_path)
+    batch = _upload(client)
+
+    response = client.post(
+        f"/api/batches/{batch['id']}/upload",
+        json={
+            "dry_run": False,
+            "admin_token": token,
+            "confirm_overwrite": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert token not in response.text
+    assert client.app.state.services.uploads.last_start == {
+        "batch_id": batch["id"],
+        "dry_run": False,
+        "admin_token": token,
+        "confirm_overwrite": True,
+    }
 
 
 @pytest.mark.parametrize(

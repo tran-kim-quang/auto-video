@@ -52,7 +52,8 @@ def test_init_settings_copies_legacy_and_applies_overrides(tmp_path: Path) -> No
     assert WebLayout(layout.root).ensure().state.joinpath("settings.json").is_file()
 
 
-def test_parse_args_defaults() -> None:
+def test_parse_args_defaults(monkeypatch) -> None:
+    monkeypatch.delenv("PYRAMID_BACKEND_API", raising=False)
     args = parse_args([])
 
     assert (args.host, args.port, args.max_active, args.gpu_slots) == (
@@ -61,6 +62,7 @@ def test_parse_args_defaults() -> None:
         3,
         1,
     )
+    assert args.backend_api == "https://api.pyramid.edu.vn/api/v1"
 
 
 def test_parse_args_max_reference_seconds_default() -> None:

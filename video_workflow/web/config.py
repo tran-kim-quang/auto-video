@@ -12,6 +12,7 @@ from typing import Any
 
 from ..job_models import GlobalSettings
 from ..json_store import JsonStore
+from .production_api import DEFAULT_BACKEND_API
 from .voices import DEFAULT_MAX_REFERENCE_SECONDS
 
 
@@ -99,6 +100,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--upload-repo",
         type=Path,
         default=Path(upload_repo) if upload_repo else None,
+    )
+    parser.add_argument(
+        "--backend-api",
+        default=os.environ.get("PYRAMID_BACKEND_API") or DEFAULT_BACKEND_API,
     )
     parser.add_argument(
         "--max-reference-seconds",
