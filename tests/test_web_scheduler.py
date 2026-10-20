@@ -245,3 +245,33 @@ def test_retry_preserves_output_root(tmp_path: Path) -> None:
     assert retried.output_root == "/tmp/results"
     assert retried.video_path is None
     assert retried.vtt_path is None
+
+
+def test_update_output_paths_persists_without_changing_status(tmp_path: Path) -> None:
+    store = WebStore(tmp_path)
+    completed = replace(
+        WebJob.new(
+            batch_id="batch",
+            leaf_relpath="A/Toan6/B/T1",
+            profile_id="voice",
+            script_chars=10,
+            output_root="/tmp/results",
+        ),
+        status=JobStatus.COMPLETED,
+        video_path="/tmp/results/old.mp4",
+        vtt_path="/tmp/results/old/vi.vtt",
+    )
+    store.save_jobs([completed])
+    scheduler = JobScheduler(store, lambda *_args: None)
+
+    updated = scheduler.update_output_paths(
+        completed.id,
+        "/tmp/results/parked.mp4",
+        "/tmp/results/parked/vi.vtt",
+    )
+
+    assert updated.status is JobStatus.COMPLETED
+    assert updated.video_path == "/tmp/results/parked.mp4"
+    assert updated.vtt_path == "/tmp/results/parked/vi.vtt"
+    persisted = WebStore(tmp_path).load_jobs()[0]
+    assert persisted == updated

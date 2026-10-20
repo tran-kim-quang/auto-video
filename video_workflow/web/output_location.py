@@ -12,6 +12,7 @@ class OutputRootError(ValueError):
 
 
 INTERNAL_DIRS = ("uploads", "work", "tts-cache", "state", "logs", "exports")
+PARKED_DIR = "_chua-co-tren-production"
 
 
 def resolve_output_root(raw: str, workspace_root: Path) -> Path:
@@ -53,6 +54,27 @@ def output_paths(output_root: Path, leaf_relpath: str) -> tuple[Path, Path]:
     video_path = output_root.joinpath(*parts[:-1], f"{parts[-1]}.mp4")
     vtt_path = output_root.joinpath(*parts, "vi.vtt")
     return video_path, vtt_path
+
+
+def parked_paths(output_root: Path, leaf_relpath: str) -> tuple[Path, Path]:
+    return output_paths(Path(output_root) / PARKED_DIR, leaf_relpath)
+
+
+def is_parked(output_root: Path, video_path: Path) -> bool:
+    parked_root = (Path(output_root) / PARKED_DIR).resolve()
+    return Path(video_path).resolve().is_relative_to(parked_root)
+
+
+def move_output_files(
+    video_src: Path,
+    vtt_src: Path,
+    video_dest: Path,
+    vtt_dest: Path,
+) -> None:
+    video_dest.parent.mkdir(parents=True, exist_ok=True)
+    vtt_dest.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(video_src, video_dest)
+    os.replace(vtt_src, vtt_dest)
 
 
 def publish_output_files(
