@@ -22,12 +22,13 @@ Hai global asset bắt buộc:
 - một ảnh logo, áp dụng cho phần bài giảng;
 - một video outro, nối đúng một lần sau slide cuối.
 
-Kịch bản TXT dùng marker `Slide N:`. Phần trước marker `Slide 2:` là nội dung
-slide 1; `Slide 1:` tường minh cũng được chấp nhận. Ví dụ:
+Kịch bản TXT dùng marker `Slide N:`; viết liền `slide1:` hoặc in hoa `SLIDE 1:`
+cũng được chấp nhận. Kịch bản bắt đầu bằng `Slide 1:` hoặc `Slide 2:`; phần chữ
+đứng trước marker đầu tiên (ví dụ tiêu đề) bị bỏ qua, không được đọc. Ví dụ:
 
 ```text
-Mở đầu của slide 1.
-Slide 2: Nội dung slide thứ hai.
+Slide 1: Mở đầu của slide 1.
+slide2: Nội dung slide thứ hai.
 Slide 3:
 Nội dung có thể nằm trên nhiều dòng.
 ```
@@ -144,7 +145,7 @@ thư mục `uploads`, `work`, `tts-cache`, `state` và `logs`.
 
 Mỗi folder lá phải chứa đúng một file `.pptx` và một file kịch bản `.txt`; hai
 file không cần trùng tên. Folder `output`, folder ẩn và file rác hệ điều hành
-được bỏ qua. Kết quả của mỗi bài gồm đúng `<tên-pptx>.mp4` và `vi.vtt` trong
+được bỏ qua. Kết quả của mỗi bài gồm đúng `<tên-folder-lá>.mp4` và `vi.vtt` trong
 folder `output`.
 
 Để máy khác trong LAN truy cập, mở cổng TCP 8080 trong Windows Firewall. Chạy
@@ -157,6 +158,34 @@ File ghi âm mẫu để nhân bản giọng được giới hạn mặc định
 lượng card; mức VRAM đo được xấp xỉ `1,9 GB + 0,3 GB × số giây`. Nên dùng đoạn
 3–7 giây và nhập đúng lời nói trong file; giới hạn này không áp dụng cho video
 bài giảng.
+
+### Upload lên R2
+
+Mỗi bài cần nằm trong cây ba tầng
+`<Mã môn>/<Bài N_Tên bài>/<T<số>_Tên tiết>`. Có thể bọc thêm folder
+bên ngoài; hệ thống luôn dùng ba thành phần cuối. Bài không đúng
+quy ước vẫn tạo video được nhưng sẽ hiện lý do chưa upload được.
+
+Cấu hình repo upload bằng một trong hai cách:
+
+```bash
+export PYRAMID_UPLOAD_REPO=/duong/dan/pyramid-upload-to-r2
+python -m video_workflow.web
+
+# hoặc
+python -m video_workflow.web --upload-repo /duong/dan/pyramid-upload-to-r2
+```
+
+Máy chủ cần có Node trên `PATH`; chạy `npm install` trong repo
+`pyramid-upload-to-r2` và cấu hình file `.env` của repo đó. Trang web chỉ
+kiểm tra file `.env` có tồn tại, không đọc hay hiển thị khoá R2.
+
+Trong tab **Hàng đợi**, nút **Kiểm tra upload** chạy toàn bộ luồng
+ở chế độ dry-run, không đẩy dữ liệu lên R2. Chỉ dùng **Upload lên
+R2** sau khi lần kiểm tra thành công. Khi xong, giao diện hiển đường
+dẫn tuyệt đối của manifest video, manifest phụ đề và log. Manifest
+dry-run nằm trong `video_and_cc/exports/<batch-id>/<thời-gian>/dry-run-output/`;
+manifest upload thật nằm trong thư mục output của repo upload.
 
 ## Phát triển và kiểm tra
 

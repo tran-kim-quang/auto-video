@@ -106,7 +106,7 @@ def run_web_job(
     video_path = publish_leaf_output(
         leaf_path,
         Path(report.output),
-        leaf.pptx.stem,
+        leaf_path.name,
         vtt_text,
     )
     tts_seconds = sum(

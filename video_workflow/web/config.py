@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import socket
 import sys
@@ -93,6 +94,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--outro", type=Path)
     parser.add_argument("--max-active", type=int, default=3)
     parser.add_argument("--gpu-slots", type=int, default=1)
+    upload_repo = os.environ.get("PYRAMID_UPLOAD_REPO")
+    parser.add_argument(
+        "--upload-repo",
+        type=Path,
+        default=Path(upload_repo) if upload_repo else None,
+    )
     parser.add_argument(
         "--max-reference-seconds",
         type=float,
@@ -101,12 +108,28 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def upload_readiness(repo: Path | None) -> tuple[bool, str | None]:
+    if repo is None:
+        return False, "Chưa cấu hình --upload-repo / PYRAMID_UPLOAD_REPO"
+    repo = Path(repo)
+    if not repo.is_dir():
+        return False, f"Không tìm thấy repo upload: {repo}"
+    if shutil.which("node") is None:
+        return False, "Không tìm thấy node trên PATH"
+    if not (repo / "node_modules").is_dir():
+        return False, "Repo upload chưa cài thư viện (thiếu node_modules)"
+    if not (repo / ".env").is_file():
+        return False, "Repo upload thiếu file .env"
+    return True, None
+
+
 def build_status(
     settings: GlobalSettings,
     voicestudio_ok: Callable[[], bool],
     port: int,
     *,
     max_reference_seconds: float = DEFAULT_MAX_REFERENCE_SECONDS,
+    upload_repo: Path | None = None,
 ) -> dict[str, Any]:
     ffmpeg = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
     slide_export = True if sys.platform == "win32" else bool(
@@ -115,6 +138,7 @@ def build_status(
     voice_ok = bool(voicestudio_ok())
     logo_ok = settings.logo is not None and Path(settings.logo).is_file()
     outro_ok = settings.outro is not None and Path(settings.outro).is_file()
+    upload_ready, upload_reason = upload_readiness(upload_repo)
     return {
         "voicestudio": voice_ok,
         "ffmpeg": ffmpeg,
@@ -124,4 +148,6 @@ def build_status(
         "ready": bool(logo_ok and outro_ok and ffmpeg and voice_ok),
         "lan_urls": lan_urls(port),
         "max_reference_seconds": float(max_reference_seconds),
+        "upload_ready": upload_ready,
+        "upload_reason": upload_reason,
     }

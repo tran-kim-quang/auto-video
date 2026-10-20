@@ -12,6 +12,7 @@ from video_workflow.web.config import (
     init_settings,
     lan_urls,
     parse_args,
+    upload_readiness,
 )
 
 
@@ -65,6 +66,41 @@ def test_parse_args_defaults() -> None:
 def test_parse_args_max_reference_seconds_default() -> None:
     assert parse_args([]).max_reference_seconds == 7.0
     assert parse_args(["--max-reference-seconds", "6.5"]).max_reference_seconds == 6.5
+
+
+def test_parse_args_upload_repo_from_environment(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("PYRAMID_UPLOAD_REPO", str(tmp_path / "upload-repo"))
+
+    assert parse_args([]).upload_repo == tmp_path / "upload-repo"
+    assert parse_args(["--upload-repo", str(tmp_path / "explicit")]).upload_repo == tmp_path / "explicit"
+
+
+def test_upload_readiness_reports_missing_configuration() -> None:
+    assert upload_readiness(None) == (
+        False,
+        "Chưa cấu hình --upload-repo / PYRAMID_UPLOAD_REPO",
+    )
+
+
+def test_upload_readiness_reports_missing_node_modules(tmp_path: Path, monkeypatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".env").touch()
+    monkeypatch.setattr(config.shutil, "which", lambda _name: "/usr/bin/node")
+
+    assert upload_readiness(repo) == (
+        False,
+        "Repo upload chưa cài thư viện (thiếu node_modules)",
+    )
+
+
+def test_upload_readiness_reports_node_missing(tmp_path: Path, monkeypatch) -> None:
+    repo = tmp_path / "repo"
+    (repo / "node_modules").mkdir(parents=True)
+    (repo / ".env").touch()
+    monkeypatch.setattr(config.shutil, "which", lambda _name: None)
+
+    assert upload_readiness(repo) == (False, "Không tìm thấy node trên PATH")
 
 
 def test_lan_urls_excludes_loopback() -> None:

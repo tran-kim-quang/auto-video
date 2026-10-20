@@ -19,7 +19,7 @@ class SlideScriptSegment:
     text_sha256: str
 
 
-_SLIDE_MARKER = re.compile(r"\bslide\s+(-?\d+)\s*:", re.IGNORECASE)
+_SLIDE_MARKER = re.compile(r"\bslide\s*(-?\d+)\s*:", re.IGNORECASE)
 _DECORATIVE_LINE = re.compile(r"^\s*([=_*\-])\1{2,}\s*$")
 
 

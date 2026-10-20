@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 from pptx import Presentation
 
@@ -15,7 +16,9 @@ from video_workflow.web.app import WebServices, create_app
 from video_workflow.web.config import WebLayout
 from video_workflow.web.gpu import GpuArbiter
 from video_workflow.web.scheduler import DuplicateJobError
-from video_workflow.web.state import WebJob, WebStore
+from video_workflow.web.state import UploadRunRecord, WebJob, WebStore
+from video_workflow.web.upload_identity import UploadCheck, upload_triple
+from video_workflow.web.upload_service import UploadBusyError
 from video_workflow.web.voices import VoiceInUseError, VoiceService
 
 
@@ -84,6 +87,59 @@ class _Voices:
             raise VoiceInUseError("Giọng đang được dùng bởi 2 bài trong hàng đợi")
 
 
+class _Uploads:
+    def __init__(self) -> None:
+        self.busy = False
+        self.items: list[UploadRunRecord] = []
+
+    def checks(self, relpaths):
+        result = {}
+        for relpath in relpaths:
+            triple = upload_triple(relpath)
+            result[relpath] = UploadCheck(
+                relpath=relpath,
+                identity=None,
+                issue=(
+                    None
+                    if triple is not None
+                    else "Thiếu tầng Mã môn/Bài: cần dạng "
+                    "<Mã môn>/<Bài N_Tên bài>/<T<tiết>_Tên tiết>"
+                ),
+                warning=None,
+            )
+        return result
+
+    def start(self, batch_id, *, dry_run):
+        if self.busy:
+            raise UploadBusyError("Đang có một lượt upload khác chạy")
+        record = UploadRunRecord(
+            id="run-1",
+            batch_id=batch_id,
+            dry_run=dry_run,
+            status="running",
+            started_at="2026-10-20T10:00:00+00:00",
+            finished_at=None,
+            phase="video",
+            current=0,
+            total=1,
+            video_total=1,
+            video_ok=0,
+            cc_total=0,
+            cc_ok=0,
+            video_manifest=None,
+            cc_manifest=None,
+            log_path=None,
+            errors=[],
+        )
+        self.items.append(record)
+        return record
+
+    def runs(self, batch_id=None):
+        return [
+            item for item in self.items if batch_id is None or item.batch_id == batch_id
+        ]
+
+
 def _client(tmp_path: Path, voices=None):
     layout = WebLayout(tmp_path / "data").ensure()
     store = WebStore(layout.state)
@@ -93,6 +149,7 @@ def _client(tmp_path: Path, voices=None):
         store=store,
         scheduler=scheduler,
         voices=voices or _Voices(),
+        uploads=_Uploads(),
         settings=GlobalSettings,
         status=lambda: {
             "voicestudio": True,
@@ -103,6 +160,8 @@ def _client(tmp_path: Path, voices=None):
             "ready": True,
             "lan_urls": [],
             "max_reference_seconds": 7.0,
+            "upload_ready": True,
+            "upload_reason": None,
         },
     )
     return TestClient(create_app(services)), layout, scheduler
@@ -140,6 +199,61 @@ def test_upload_then_scan(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert response.json()["leaves"][0]["relpath"] == "root/t40"
     assert response.json()["leaves"][0]["valid"] is True
+
+
+def test_batch_leaf_includes_upload_issue_for_short_path(tmp_path: Path) -> None:
+    client, _layout, _scheduler = _client(tmp_path)
+    batch = _upload(client)
+
+    leaf = client.get(f"/api/batches/{batch['id']}").json()["leaves"][0]
+
+    assert leaf["upload_issue"].startswith("Thiếu tầng Mã môn/Bài")
+    assert leaf["upload_warning"] is None
+    assert leaf["upload_triple"] is None
+
+
+def test_upload_busy_returns_409(tmp_path: Path) -> None:
+    client, _layout, _scheduler = _client(tmp_path)
+    batch = _upload(client)
+    client.app.state.services.uploads.busy = True
+
+    response = client.post(f"/api/batches/{batch['id']}/upload", json={"dry_run": True})
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Đang có một lượt upload khác chạy"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{}, {"dry_run": None}, {"dry_run": "false"}, {"dry_run": 0}],
+)
+def test_upload_requires_explicit_strict_boolean(
+    tmp_path: Path,
+    payload: dict,
+) -> None:
+    client, _layout, _scheduler = _client(tmp_path)
+    batch = _upload(client)
+
+    response = client.post(f"/api/batches/{batch['id']}/upload", json=payload)
+
+    assert response.status_code == 422
+    assert client.app.state.services.uploads.items == []
+
+
+def test_batch_leaf_upload_output_requires_exact_mp4_and_vtt(tmp_path: Path) -> None:
+    client, layout, _scheduler = _client(tmp_path)
+    batch = _upload(client)
+    leaf = layout.uploads / batch["id"] / "root" / "t40"
+    output = leaf / "output"
+    output.mkdir()
+    (output / "video.mp4").write_bytes(b"video")
+
+    incomplete = client.get(f"/api/batches/{batch['id']}").json()["leaves"][0]
+    assert incomplete["upload_output_ready"] is False
+
+    (output / "vi.vtt").write_text("WEBVTT\n", encoding="utf-8")
+    ready = client.get(f"/api/batches/{batch['id']}").json()["leaves"][0]
+    assert ready["upload_output_ready"] is True
 
 
 def test_upload_traversal_rejected(tmp_path: Path) -> None:
@@ -354,3 +468,37 @@ def test_ui_hint_uses_status_limit() -> None:
 
     assert "Nên 5–15 giây" not in source
     assert "max_reference_seconds" in source
+
+
+def test_r2_upload_controls_and_results_are_present() -> None:
+    source = (
+        Path(__file__).parents[1]
+        / "video_workflow"
+        / "web"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    for text in (
+        "Kiểm tra upload",
+        "Upload lên R2",
+        "KHÔNG import",
+        "Manifest phụ đề",
+    ):
+        assert text in source
+
+
+def test_r2_controls_use_exact_output_eligibility_and_safe_copy_fallback() -> None:
+    source = (
+        Path(__file__).parents[1]
+        / "video_workflow"
+        / "web"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "upload_output_ready" in source
+    assert "l?.has_output" not in source
+    assert "new Set" in source
+    assert 'document.execCommand("copy")' in source
+    assert "upload_warning" in source
