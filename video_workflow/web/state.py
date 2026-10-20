@@ -77,6 +77,27 @@ class BatchRecord:
     created_at: str
 
 
+@dataclass(frozen=True, slots=True)
+class UploadRunRecord:
+    id: str
+    batch_id: str
+    dry_run: bool
+    status: str
+    started_at: str
+    finished_at: str | None
+    phase: str | None
+    current: int
+    total: int
+    video_total: int
+    video_ok: int
+    cc_total: int
+    cc_ok: int
+    video_manifest: str | None
+    cc_manifest: str | None
+    log_path: str | None
+    errors: list[str]
+
+
 class WebStore:
     def __init__(self, state_dir: Path) -> None:
         self.state_dir = Path(state_dir)
@@ -151,6 +172,27 @@ class WebStore:
                     "schema_version": 1,
                     "batches": [asdict(item) for item in batches],
                 },
+            )
+
+    def load_uploads(self) -> list[UploadRunRecord]:
+        with self._lock:
+            payload = self._read("uploads.json")
+            if payload is None:
+                return []
+            try:
+                runs = payload["runs"]
+                if not isinstance(runs, list):
+                    raise ValueError("runs must be a list")
+                return [UploadRunRecord(**item) for item in runs]
+            except (KeyError, TypeError, ValueError):
+                self._preserve_invalid(self.state_dir / "uploads.json")
+                return []
+
+    def save_uploads(self, runs: Sequence[UploadRunRecord]) -> None:
+        with self._lock:
+            self._write(
+                "uploads.json",
+                {"schema_version": 1, "runs": [asdict(run) for run in runs]},
             )
 
     def default_voice(self) -> str:
