@@ -22,12 +22,13 @@ Hai global asset bắt buộc:
 - một ảnh logo, áp dụng cho phần bài giảng;
 - một video outro, nối đúng một lần sau slide cuối.
 
-Kịch bản TXT dùng marker `Slide N:`. Phần trước marker `Slide 2:` là nội dung
-slide 1; `Slide 1:` tường minh cũng được chấp nhận. Ví dụ:
+Kịch bản TXT dùng marker `Slide N:`; viết liền `slide1:` hoặc in hoa `SLIDE 1:`
+cũng được chấp nhận. Kịch bản bắt đầu bằng `Slide 1:` hoặc `Slide 2:`; phần chữ
+đứng trước marker đầu tiên (ví dụ tiêu đề) bị bỏ qua, không được đọc. Ví dụ:
 
 ```text
-Mở đầu của slide 1.
-Slide 2: Nội dung slide thứ hai.
+Slide 1: Mở đầu của slide 1.
+slide2: Nội dung slide thứ hai.
 Slide 3:
 Nội dung có thể nằm trên nhiều dòng.
 ```

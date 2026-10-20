@@ -36,6 +36,16 @@ def test_accepts_explicit_slide_one_and_multiline_text() -> None:
     ]
 
 
+def test_accepts_markers_without_space() -> None:
+    segments = parse_slide_script_text("slide1:\nMột.\nslide2:\nHai.\nSLIDE3 : Ba.")
+
+    assert [(segment.slide_id, segment.text) for segment in segments] == [
+        (1, "Một."),
+        (2, "Hai."),
+        (3, "Ba."),
+    ]
+
+
 def test_preserves_math_semicolons_and_normalizes_unicode_nfc() -> None:
     segments = parse_slide_script_text(
         "Slide 1: Điểm A (0; 6; 3). Slide 2: Cafe\u0301."
