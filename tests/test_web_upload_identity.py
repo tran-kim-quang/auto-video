@@ -29,6 +29,7 @@ def _parsed(
     lesson_slug: str = "19-bai-19-x",
     lesson_order: int | None = 19,
     video_slug: str = "48-y",
+    part_no: int = 1,
 ) -> dict[str, object]:
     return {
         "relativePath": relative_path,
@@ -38,7 +39,7 @@ def _parsed(
         "lessonTitle": "Bài 19: X",
         "lessonSlug": lesson_slug,
         "sectionNo": 48,
-        "partNo": 1,
+        "partNo": part_no,
         "videoTitle": "Tiết 48 - Y",
         "videoSlug": video_slug,
     }
@@ -59,6 +60,31 @@ def test_upload_triple_uses_last_three_components() -> None:
         == "Toan6/Bài 19_X/T48_Y"
     )
     assert upload_triple("test gen/T48_Y") is None
+
+
+def test_identity_keeps_section_part_and_lesson_title(tmp_path: Path) -> None:
+    paths = ["Toan6/Bài 19_X/T48_Y", "Toan6/Bài 19_X/T48_2_Y"]
+    payload = {
+        f"{paths[0]}.mp4": {
+            "identity": _parsed(f"{paths[0]}.mp4"),
+            "courseKnown": True,
+        },
+        f"{paths[1]}.mp4": {
+            "identity": _parsed(
+                f"{paths[1]}.mp4", video_slug="48-2-y", part_no=2
+            ),
+            "courseKnown": True,
+        },
+    }
+
+    checks = check_upload_identities(tmp_path, paths, run=_runner(payload))
+
+    assert checks[paths[0]].identity is not None
+    assert checks[paths[0]].identity.section_no == 48
+    assert checks[paths[0]].identity.part_no == 1
+    assert checks[paths[0]].identity.lesson_title == "Bài 19: X"
+    assert checks[paths[1]].identity is not None
+    assert checks[paths[1]].identity.part_no == 2
 
 
 def test_exact_issues_and_warning_from_helper_results(tmp_path: Path) -> None:

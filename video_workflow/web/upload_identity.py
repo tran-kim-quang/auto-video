@@ -26,6 +26,9 @@ class UploadIdentity:
     course_slug: str
     lesson_slug: str
     lesson_order: int | None
+    lesson_title: str
+    section_no: int
+    part_no: int
     video_slug: str
     video_title: str
 
@@ -64,6 +67,9 @@ def _identity(triple: str, value: dict[str, Any]) -> UploadIdentity:
         lesson_order=(
             None if value.get("lessonOrder") is None else int(value["lessonOrder"])
         ),
+        lesson_title=str(value["lessonTitle"]),
+        section_no=int(value["sectionNo"]),
+        part_no=int(value["partNo"]),
         video_slug=str(value["videoSlug"]),
         video_title=str(value["videoTitle"]),
     )
