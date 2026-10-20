@@ -31,4 +31,4 @@ markers = ["integration: requires real Linux media and slide tools"]
 include = ["video_workflow*"]
 
 [tool.setuptools.package-data]
-video_workflow = ["web/static/*"]
+video_workflow = ["web/static/*", "web/node/*.mjs"]
