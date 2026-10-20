@@ -720,3 +720,30 @@ def test_output_root_controls_and_saved_path_are_present() -> None:
     assert 'id="output-root"' in index
     assert "output_root" in javascript
     assert "Lưu tại:" in javascript
+
+
+def test_production_sync_controls_phases_and_review_warning_are_present() -> None:
+    static_dir = Path(__file__).parents[1] / "video_workflow" / "web" / "static"
+    index = (static_dir / "index.html").read_text(encoding="utf-8")
+    javascript = (static_dir / "app.js").read_text(encoding="utf-8")
+    combined = index + javascript
+
+    for text in (
+        "Token admin (production)",
+        "GHI ĐÈ",
+        "Đang chờ backend xử lý…",
+        "Cần kiểm tra",
+    ):
+        assert text in combined
+    assert not (
+        "localStorage.setItem" in javascript and "token" in javascript.lower()
+    )
+
+
+def test_queue_refresh_keeps_token_focus_and_dry_run_label() -> None:
+    static_dir = Path(__file__).parents[1] / "video_workflow" / "web" / "static"
+    javascript = (static_dir / "app.js").read_text(encoding="utf-8")
+    render_jobs = javascript[javascript.index("function renderJobs(){") :].split("\n", 1)[0]
+    assert render_jobs.startswith("function renderJobs(){const focused=tokenFocus();")
+    assert render_jobs.endswith("bindQueue();restoreTokenFocus(focused)}")
+    assert "sẽ chuyển sang thư mục chờ khi upload thật" in javascript
