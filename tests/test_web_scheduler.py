@@ -75,6 +75,57 @@ def test_duplicate_leaf_rejected(tmp_path: Path) -> None:
         scheduler.stop()
 
 
+def test_duplicate_output_in_one_enqueue_is_rejected_atomically(tmp_path: Path) -> None:
+    scheduler = JobScheduler(WebStore(tmp_path / "state"), lambda *_args: None)
+
+    with pytest.raises(
+        DuplicateJobError,
+        match="^Trùng vị trí lưu với bài A/Toan6/B/T1$",
+    ):
+        scheduler.enqueue(
+            "batch",
+            [("A/Toan6/B/T1", 10), ("C/Toan6/B/T1", 20)],
+            "voice",
+            output_root=str(tmp_path / "out"),
+        )
+
+    assert scheduler.jobs() == ()
+
+
+def test_same_relative_output_in_different_roots_is_allowed(tmp_path: Path) -> None:
+    scheduler = JobScheduler(WebStore(tmp_path / "state"), lambda *_args: None)
+
+    first = scheduler.enqueue(
+        "batch",
+        [("A/Toan6/B/T1", 10)],
+        "voice",
+        output_root=str(tmp_path / "first"),
+    )[0]
+    second = scheduler.enqueue(
+        "batch",
+        [("C/Toan6/B/T1", 10)],
+        "voice",
+        output_root=str(tmp_path / "second"),
+    )[0]
+
+    assert first.output_root == str(tmp_path / "first")
+    assert second.output_root == str(tmp_path / "second")
+
+
+def test_completed_job_records_vtt_path(tmp_path: Path) -> None:
+    def run(job, cancel, update):
+        return RunResult(Path("/video.mp4"), 1.0, Path("/video/vi.vtt"))
+
+    scheduler = JobScheduler(WebStore(tmp_path), run)
+    scheduler.enqueue("batch", [("leaf", 10)], "voice")
+    scheduler.start()
+    try:
+        _wait(lambda: scheduler.jobs()[0].status is JobStatus.COMPLETED)
+        assert scheduler.jobs()[0].vtt_path == "/video/vi.vtt"
+    finally:
+        scheduler.stop()
+
+
 def test_cancel_waiting_and_running(tmp_path: Path) -> None:
     def run(job, cancel, update):
         while not cancel.wait(0.01):
@@ -170,3 +221,27 @@ def test_retry_only_failed_or_interrupted(tmp_path: Path) -> None:
 
     with pytest.raises(JobStateError):
         scheduler.retry(completed.id)
+
+
+def test_retry_preserves_output_root(tmp_path: Path) -> None:
+    store = WebStore(tmp_path)
+    failed = replace(
+        WebJob.new(
+            batch_id="batch",
+            leaf_relpath="A/Toan6/B/T1",
+            profile_id="voice",
+            script_chars=10,
+            output_root="/tmp/results",
+        ),
+        status=JobStatus.FAILED,
+        video_path="/tmp/old.mp4",
+        vtt_path="/tmp/old/vi.vtt",
+    )
+    store.save_jobs([failed])
+    scheduler = JobScheduler(store, lambda *_args: None)
+
+    retried = scheduler.retry(failed.id)
+
+    assert retried.output_root == "/tmp/results"
+    assert retried.video_path is None
+    assert retried.vtt_path is None

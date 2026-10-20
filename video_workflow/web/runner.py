@@ -30,6 +30,7 @@ Update = Callable[[str | None, int | None, int | None], None]
 class RunResult:
     video_path: Path
     tts_seconds: float
+    vtt_path: Path | None = None
 
 
 @dataclass
