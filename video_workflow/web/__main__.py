@@ -11,6 +11,7 @@ from .gpu import GpuArbiter
 from .runner import RunnerContext, run_web_job
 from .scheduler import JobScheduler
 from .state import WebStore
+from .upload_service import UploadService
 from .voices import VoiceService
 
 
@@ -42,6 +43,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         config=lambda: settings().voice_config(), active_jobs=scheduler.jobs,
         max_reference_seconds=args.max_reference_seconds,
     )
+    uploads = UploadService(
+        store,
+        layout,
+        repo=lambda: args.upload_repo,
+        jobs=scheduler.jobs,
+    )
 
     def voice_ok() -> bool:
         try:
@@ -52,12 +59,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     services = WebServices(
         layout=layout, store=store, scheduler=scheduler, voices=voices,
+        uploads=uploads,
         settings=settings,
         status=lambda: build_status(
             settings(),
             voice_ok,
             args.port,
             max_reference_seconds=args.max_reference_seconds,
+            upload_repo=args.upload_repo,
         ),
     )
     app = create_app(services)
@@ -68,11 +77,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         voice_ok,
         args.port,
         max_reference_seconds=args.max_reference_seconds,
+        upload_repo=args.upload_repo,
     )["lan_urls"]:
         print(f"Mở trong mạng LAN: {url}")
     try:
         uvicorn.run(app, host=args.host, port=args.port)
     finally:
+        uploads.stop()
         scheduler.stop()
         supervisor.close()
     return 0

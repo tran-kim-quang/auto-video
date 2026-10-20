@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import Body, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, StrictBool
 
 from ..job_models import GlobalSettings, JobStatus, utc_now
 from ..leaf_scan import LeafFolder, scan_leaf_folders
@@ -17,6 +18,8 @@ from .config import WebLayout
 from .estimate import remaining_seconds, seconds_per_char
 from .scheduler import DuplicateJobError, JobScheduler, JobStateError
 from .state import BatchRecord, WebStore
+from .upload_export import find_output_files
+from .upload_service import UploadBusyError, UploadNotReadyError, UploadService
 from .uploads import UploadPathError, UploadTooLarge, store_batch
 from .voices import VoiceInUseError, VoiceInputError, VoiceService
 
@@ -27,8 +30,13 @@ class WebServices:
     store: WebStore
     scheduler: JobScheduler
     voices: VoiceService
+    uploads: UploadService
     settings: Callable[[], GlobalSettings]
     status: Callable[[], dict[str, Any]]
+
+
+class UploadRequest(BaseModel):
+    dry_run: StrictBool
 
 
 class _ZipStreamWriter:
@@ -111,11 +119,25 @@ def create_app(services: WebServices) -> FastAPI:
 
     def batch_view(batch: BatchRecord) -> dict[str, Any]:
         leaves = scan_leaf_folders(services.layout.uploads / batch.id)
+        checks = services.uploads.checks(leaf.relpath for leaf in leaves)
+        leaf_views = []
+        for leaf in leaves:
+            check = checks.get(leaf.relpath)
+            identity = check.identity if check is not None else None
+            leaf_views.append(
+                {
+                    **_leaf_view(leaf),
+                    "upload_issue": check.issue if check is not None else None,
+                    "upload_warning": check.warning if check is not None else None,
+                    "upload_triple": identity.triple if identity is not None else None,
+                    "upload_output_ready": find_output_files(leaf.path) is not None,
+                }
+            )
         return {
             "id": batch.id,
             "root_name": batch.root_name,
             "created_at": batch.created_at,
-            "leaves": [_leaf_view(leaf) for leaf in leaves],
+            "leaves": leaf_views,
             "estimate_seconds_per_char": seconds_per_char(services.scheduler.jobs()),
         }
 
@@ -152,6 +174,27 @@ def create_app(services: WebServices) -> FastAPI:
     @app.get("/api/batches/{batch_id}")
     def get_batch(batch_id: str):
         return batch_view(batch_record(batch_id))
+
+    @app.post("/api/batches/{batch_id}/upload")
+    def upload_to_r2(batch_id: str, payload: UploadRequest):
+        batch_record(batch_id)
+        current_status = services.status()
+        if not current_status.get("upload_ready", False):
+            raise HTTPException(400, current_status.get("upload_reason"))
+        try:
+            record = services.uploads.start(
+                batch_id,
+                dry_run=payload.dry_run,
+            )
+        except UploadBusyError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except UploadNotReadyError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return asdict(record)
+
+    @app.get("/api/uploads")
+    def upload_runs(batch_id: str | None = Query(None)):
+        return [asdict(run) for run in services.uploads.runs(batch_id)]
 
     @app.post("/api/batches/{batch_id}/jobs")
     def create_jobs(batch_id: str, payload: dict[str, Any] = Body(...)):
