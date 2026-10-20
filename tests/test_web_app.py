@@ -590,3 +590,14 @@ def test_r2_controls_use_exact_output_eligibility_and_safe_copy_fallback() -> No
     assert "new Set" in source
     assert 'document.execCommand("copy")' in source
     assert "upload_warning" in source
+
+
+def test_output_root_controls_and_saved_path_are_present() -> None:
+    static_dir = Path(__file__).parents[1] / "video_workflow" / "web" / "static"
+    index = (static_dir / "index.html").read_text(encoding="utf-8")
+    javascript = (static_dir / "app.js").read_text(encoding="utf-8")
+
+    assert "Thư mục lưu kết quả (trên máy server)" in index
+    assert 'id="output-root"' in index
+    assert "output_root" in javascript
+    assert "Lưu tại:" in javascript

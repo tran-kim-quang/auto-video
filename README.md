@@ -145,8 +145,22 @@ thư mục `uploads`, `work`, `tts-cache`, `state` và `logs`.
 
 Mỗi folder lá phải chứa đúng một file `.pptx` và một file kịch bản `.txt`; hai
 file không cần trùng tên. Folder `output`, folder ẩn và file rác hệ điều hành
-được bỏ qua. Kết quả của mỗi bài gồm đúng `<tên-folder-lá>.mp4` và `vi.vtt` trong
-folder `output`.
+được bỏ qua.
+
+Trước khi tạo video, nhập **Thư mục lưu kết quả (trên máy server)**.
+Thư mục được dùng lại cho lần sau. Kết quả lấy ba thành phần cuối
+của đường dẫn folder lá và được xếp sẵn cho tool upload:
+
+```text
+<thư-mục-kết-quả>/
+  Toan6/
+    Bài 19_Hình thang cân/
+      T48_Hình thang cân.mp4
+      T48_Hình thang cân/
+        vi.vtt
+```
+
+Job cũ tạo trước thay đổi này vẫn đọc kết quả từ `<folder-lá>/output/`.
 
 Để máy khác trong LAN truy cập, mở cổng TCP 8080 trong Windows Firewall. Chạy
 ứng dụng trong phiên người dùng đã đăng nhập để PowerPoint và VoiceStudio hoạt
@@ -186,6 +200,15 @@ R2** sau khi lần kiểm tra thành công. Khi xong, giao diện hiển đườ
 dẫn tuyệt đối của manifest video, manifest phụ đề và log. Manifest
 dry-run nằm trong `video_and_cc/exports/<batch-id>/<thời-gian>/dry-run-output/`;
 manifest upload thật nằm trong thư mục output của repo upload.
+
+Có thể kiểm tra thủ công ngay trong repo `pyramid-upload-to-r2` bằng cùng
+thư mục kết quả cho video và phụ đề:
+
+```bash
+cd /duong/dan/pyramid-upload-to-r2
+SOURCE_DIR="<thư mục>" npm run dry-run
+CC_SOURCE_DIR="<thư mục>" npm run dry-run:cc
+```
 
 ## Phát triển và kiểm tra
 
