@@ -28,8 +28,8 @@ def _deck(path: Path) -> None:
 
 def _setup(tmp_path: Path):
     uploads = tmp_path / "uploads"
-    leaf = uploads / "batch-1" / "root" / "lesson"
-    _deck(leaf / "deck.pptx")
+    leaf = uploads / "batch-1" / "root" / "T48_Hình thang cân"
+    _deck(leaf / "TOAN6_B19_T48.pptx")
     (leaf / "script.txt").write_text("Slide 1: Xin chào.", encoding="utf-8")
     logo = tmp_path / "logo.png"
     outro = tmp_path / "outro.mp4"
@@ -38,7 +38,7 @@ def _setup(tmp_path: Path):
     settings = GlobalSettings(logo=logo, outro=outro)
     job = WebJob.new(
         batch_id="batch-1",
-        leaf_relpath="root/lesson",
+        leaf_relpath="root/T48_Hình thang cân",
         profile_id="abc12345",
         script_chars=9,
     )
@@ -95,19 +95,19 @@ def _setup(tmp_path: Path):
     return leaf, job, context, captured
 
 
-def test_run_publishes_video_and_vtt(tmp_path: Path) -> None:
+def test_output_named_after_leaf_folder(tmp_path: Path) -> None:
     leaf, job, context, _captured = _setup(tmp_path)
 
     result = run_web_job(job, context, threading.Event(), lambda *_args: None)
 
     assert sorted(path.name for path in (leaf / "output").iterdir()) == [
-        "deck.mp4",
+        "T48_Hình thang cân.mp4",
         "vi.vtt",
     ]
     assert (leaf / "output" / "vi.vtt").read_text(encoding="utf-8").startswith(
         "WEBVTT\n\n1\n00:00:00.000"
     )
-    assert result.video_path == leaf / "output" / "deck.mp4"
+    assert result.video_path.name == "T48_Hình thang cân.mp4"
     assert result.tts_seconds == 3.0
 
 
