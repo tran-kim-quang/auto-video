@@ -37,7 +37,7 @@ class _Scheduler:
     def jobs(self):
         return tuple(self.items)
 
-    def enqueue(self, batch_id, leaves, profile_id):
+    def enqueue(self, batch_id, leaves, profile_id, output_root=None):
         for relpath, _chars in leaves:
             if any(
                 job.batch_id == batch_id
@@ -52,6 +52,7 @@ class _Scheduler:
                 leaf_relpath=relpath,
                 profile_id=profile_id,
                 script_chars=chars,
+                output_root=output_root,
             )
             for relpath, chars in leaves
         ]
@@ -162,6 +163,7 @@ def _client(tmp_path: Path, voices=None):
             "max_reference_seconds": 7.0,
             "upload_ready": True,
             "upload_reason": None,
+            "last_output_root": store.last_output_root(),
         },
     )
     return TestClient(create_app(services)), layout, scheduler
@@ -274,12 +276,98 @@ def test_upload_traversal_rejected(tmp_path: Path) -> None:
 def test_create_jobs_duplicate_409(tmp_path: Path) -> None:
     client, _layout, _scheduler = _client(tmp_path)
     batch = _upload(client)
-    body = {"leaves": ["root/t40"], "profile_id": "voice"}
+    body = {
+        "leaves": ["root/t40"],
+        "profile_id": "voice",
+        "output_root": str(tmp_path / "results"),
+    }
 
     assert client.post(f"/api/batches/{batch['id']}/jobs", json=body).status_code == 200
     response = client.post(f"/api/batches/{batch['id']}/jobs", json=body)
 
     assert response.status_code == 409
+
+
+def test_create_jobs_requires_output_root(tmp_path: Path) -> None:
+    client, _layout, _scheduler = _client(tmp_path)
+    batch = _upload(client)
+
+    response = client.post(
+        f"/api/batches/{batch['id']}/jobs",
+        json={"leaves": ["root/t40"], "profile_id": "voice"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Cần nhập thư mục lưu kết quả"
+
+
+def test_create_jobs_rejects_internal_output_root(tmp_path: Path) -> None:
+    client, layout, _scheduler = _client(tmp_path)
+    batch = _upload(client)
+
+    response = client.post(
+        f"/api/batches/{batch['id']}/jobs",
+        json={
+            "leaves": ["root/t40"],
+            "profile_id": "voice",
+            "output_root": str(layout.uploads / "x"),
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Không được lưu vào thư mục nội bộ của tool"
+    )
+
+
+def test_create_jobs_stores_resolved_output_root_in_job_and_status(
+    tmp_path: Path,
+) -> None:
+    client, _layout, scheduler = _client(tmp_path)
+    batch = _upload(client)
+    output_root = tmp_path / "Video bài giảng"
+
+    response = client.post(
+        f"/api/batches/{batch['id']}/jobs",
+        json={
+            "leaves": ["root/t40"],
+            "profile_id": "voice",
+            "output_root": str(output_root),
+        },
+    )
+
+    assert response.status_code == 200
+    assert scheduler.items[0].output_root == str(output_root.resolve())
+    assert client.get("/api/status").json()["last_output_root"] == str(
+        output_root.resolve()
+    )
+
+
+def test_subtitles_uses_stored_vtt_path(tmp_path: Path) -> None:
+    client, _layout, scheduler = _client(tmp_path)
+    video = tmp_path / "elsewhere" / "lesson.mp4"
+    vtt = tmp_path / "captions" / "lesson" / "vi.vtt"
+    video.parent.mkdir()
+    vtt.parent.mkdir(parents=True)
+    video.write_bytes(b"video")
+    vtt.write_text("WEBVTT\nnew location\n", encoding="utf-8")
+    job = replace(
+        WebJob.new(
+            batch_id="batch",
+            leaf_relpath="root/t40",
+            profile_id="v",
+            script_chars=1,
+        ),
+        status=JobStatus.COMPLETED,
+        video_path=str(video),
+        vtt_path=str(vtt),
+    )
+    scheduler.items.append(job)
+
+    response = client.get(f"/api/jobs/{job.id}/subtitles")
+
+    assert response.status_code == 200
+    assert response.text == "WEBVTT\nnew location\n"
 
 
 def test_video_range_request(tmp_path: Path) -> None:
@@ -502,3 +590,14 @@ def test_r2_controls_use_exact_output_eligibility_and_safe_copy_fallback() -> No
     assert "new Set" in source
     assert 'document.execCommand("copy")' in source
     assert "upload_warning" in source
+
+
+def test_output_root_controls_and_saved_path_are_present() -> None:
+    static_dir = Path(__file__).parents[1] / "video_workflow" / "web" / "static"
+    index = (static_dir / "index.html").read_text(encoding="utf-8")
+    javascript = (static_dir / "app.js").read_text(encoding="utf-8")
+
+    assert "Thư mục lưu kết quả (trên máy server)" in index
+    assert 'id="output-root"' in index
+    assert "output_root" in javascript
+    assert "Lưu tại:" in javascript

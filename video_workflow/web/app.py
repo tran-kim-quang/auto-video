@@ -16,6 +16,7 @@ from ..job_models import GlobalSettings, JobStatus, utc_now
 from ..leaf_scan import LeafFolder, scan_leaf_folders
 from .config import WebLayout
 from .estimate import remaining_seconds, seconds_per_char
+from .output_location import OutputRootError, resolve_output_root
 from .scheduler import DuplicateJobError, JobScheduler, JobStateError
 from .state import BatchRecord, WebStore
 from .upload_export import find_output_files
@@ -199,6 +200,14 @@ def create_app(services: WebServices) -> FastAPI:
     @app.post("/api/batches/{batch_id}/jobs")
     def create_jobs(batch_id: str, payload: dict[str, Any] = Body(...)):
         batch = batch_record(batch_id)
+        raw_output_root = payload.get("output_root")
+        try:
+            output_root = resolve_output_root(
+                raw_output_root if isinstance(raw_output_root, str) else "",
+                services.layout.root,
+            )
+        except OutputRootError as exc:
+            raise HTTPException(400, str(exc)) from exc
         valid = {
             leaf.relpath: leaf
             for leaf in scan_leaf_folders(services.layout.uploads / batch.id)
@@ -207,11 +216,13 @@ def create_app(services: WebServices) -> FastAPI:
         requested = [str(item) for item in payload.get("leaves", [])]
         if any(relpath not in valid for relpath in requested):
             raise HTTPException(400, "Danh sách bài có folder không hợp lệ")
+        services.store.set_last_output_root(str(output_root))
         try:
             jobs = services.scheduler.enqueue(
                 batch_id,
                 [(relpath, valid[relpath].script_chars) for relpath in requested],
                 str(payload.get("profile_id", "")),
+                output_root=str(output_root),
             )
         except DuplicateJobError as exc:
             raise HTTPException(409, str(exc)) from exc
@@ -263,9 +274,12 @@ def create_app(services: WebServices) -> FastAPI:
     @app.get("/api/jobs/{job_id}/subtitles")
     def subtitles(job_id: str):
         job = find_job(job_id)
-        if not job.video_path:
+        if job.vtt_path is not None:
+            path = Path(job.vtt_path)
+        elif job.video_path:
+            path = Path(job.video_path).with_name("vi.vtt")
+        else:
             raise HTTPException(404, "Phụ đề chưa sẵn sàng")
-        path = Path(job.video_path).with_name("vi.vtt")
         if not path.is_file():
             raise HTTPException(404, "Phụ đề chưa sẵn sàng")
         return FileResponse(path, media_type="text/vtt")

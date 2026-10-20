@@ -67,6 +67,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.port,
             max_reference_seconds=args.max_reference_seconds,
             upload_repo=args.upload_repo,
+            last_output_root=store.last_output_root(),
         ),
     )
     app = create_app(services)
@@ -78,6 +79,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.port,
         max_reference_seconds=args.max_reference_seconds,
         upload_repo=args.upload_repo,
+        last_output_root=store.last_output_root(),
     )["lan_urls"]:
         print(f"Mở trong mạng LAN: {url}")
     try:

@@ -25,7 +25,18 @@ def _job(chars: int = 100) -> WebJob:
 
 def test_round_trip_web_job_and_batch(tmp_path: Path) -> None:
     store = WebStore(tmp_path)
-    job = _job()
+    job = WebJob.new(
+        batch_id="batch-1",
+        leaf_relpath="root/lesson",
+        profile_id="599fc048",
+        script_chars=100,
+        output_root="/tmp/results",
+    )
+    job = replace(
+        job,
+        video_path="/tmp/results/lesson.mp4",
+        vtt_path="/tmp/results/lesson/vi.vtt",
+    )
     batch = BatchRecord(id="batch-1", root_name="root", created_at="2026-10-19T00:00:00+00:00")
 
     store.save_jobs([job])
@@ -35,6 +46,13 @@ def test_round_trip_web_job_and_batch(tmp_path: Path) -> None:
     assert store.load_batches() == [batch]
     assert WebJob.from_dict(job.to_dict()) == job
 
+    legacy = job.to_dict()
+    legacy.pop("output_root")
+    legacy.pop("vtt_path")
+    restored = WebJob.from_dict(legacy)
+    assert restored.output_root is None
+    assert restored.vtt_path is None
+
 
 def test_default_voice_and_persistence(tmp_path: Path) -> None:
     assert WebStore(tmp_path).default_voice() == "599fc048"
@@ -42,6 +60,22 @@ def test_default_voice_and_persistence(tmp_path: Path) -> None:
     WebStore(tmp_path).set_default_voice("abc12345")
 
     assert WebStore(tmp_path).default_voice() == "abc12345"
+
+
+def test_last_output_root_and_default_voice_preserve_each_other(tmp_path: Path) -> None:
+    store = WebStore(tmp_path)
+
+    assert store.last_output_root() is None
+    store.set_default_voice("voice-1")
+    store.set_last_output_root("/tmp/Video bài giảng")
+
+    assert WebStore(tmp_path).default_voice() == "voice-1"
+    assert WebStore(tmp_path).last_output_root() == "/tmp/Video bài giảng"
+
+    store.set_default_voice("voice-2")
+
+    assert WebStore(tmp_path).default_voice() == "voice-2"
+    assert WebStore(tmp_path).last_output_root() == "/tmp/Video bài giảng"
 
 
 def test_corrupt_jobs_file_is_preserved(tmp_path: Path) -> None:

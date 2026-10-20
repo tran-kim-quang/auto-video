@@ -30,6 +30,8 @@ class WebJob:
     video_path: str | None
     script_chars: int
     tts_seconds: float | None
+    output_root: str | None = None
+    vtt_path: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
@@ -40,6 +42,8 @@ class WebJob:
     def from_dict(cls, data: dict[str, Any]) -> WebJob:
         values = dict(data)
         values["status"] = JobStatus(values["status"])
+        values.setdefault("output_root", None)
+        values.setdefault("vtt_path", None)
         return cls(**values)
 
     @classmethod
@@ -50,6 +54,7 @@ class WebJob:
         leaf_relpath: str,
         profile_id: str,
         script_chars: int,
+        output_root: str | None = None,
     ) -> WebJob:
         return cls(
             id=uuid4().hex,
@@ -67,6 +72,8 @@ class WebJob:
             video_path=None,
             script_chars=script_chars,
             tts_seconds=None,
+            output_root=output_root,
+            vtt_path=None,
         )
 
 
@@ -205,7 +212,20 @@ class WebStore:
 
     def set_default_voice(self, profile_id: str) -> None:
         with self._lock:
-            self._write(
-                "web.json",
-                {"schema_version": 1, "default_voice": profile_id},
-            )
+            payload = self._read("web.json") or {"schema_version": 1}
+            payload["default_voice"] = profile_id
+            self._write("web.json", payload)
+
+    def last_output_root(self) -> str | None:
+        with self._lock:
+            payload = self._read("web.json")
+            if payload is None:
+                return None
+            value = payload.get("last_output_root")
+            return value if isinstance(value, str) and value else None
+
+    def set_last_output_root(self, path: str) -> None:
+        with self._lock:
+            payload = self._read("web.json") or {"schema_version": 1}
+            payload["last_output_root"] = path
+            self._write("web.json", payload)

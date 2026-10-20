@@ -98,6 +98,25 @@ Batch Toan6 (upload 16:08) · 3/3 xong · [⬇ Tải tất cả video (.zip)] [K
 - Bài không upload được: biểu tượng ⚠️ + lý do §4.3; nút khoá kèm lý do khi `upload_ready` sai hoặc không có bài hợp lệ.
 - Lượt dry-run ghi rõ "(kiểm tra, chưa đẩy lên R2)".
 
+### 4.9 Thư mục kết quả do người dùng nhập (bổ sung 2026-10-20, chủ dự án duyệt)
+
+Thay cho vị trí cố định `<leaf>/output/` trong `uploads/`:
+
+- Tab Tạo video có ô **"Thư mục lưu kết quả (trên máy server)"** phía trên nút tạo; điền sẵn thư mục dùng lần trước. Người dùng nhập trước khi bấm tạo; mỗi job nhớ thư mục kết quả của nó.
+- Kiểm tra khi bấm tạo: cho phép `~` (mở rộng thành thư mục home của tiến trình server); sau đó phải là đường dẫn tuyệt đối; chưa có thì tự tạo; phải ghi được; không được nằm trong `uploads/`, `work/`, `tts-cache/`, `state/`, `logs/`, `exports/` của thư mục làm việc. Sai → lỗi tiếng Việt, không tạo job.
+- **Cách sắp xếp (để upload tiện nhất):** thư mục kết quả dùng được trực tiếp làm **cả** `SOURCE_DIR` lẫn `CC_SOURCE_DIR` của `pyramid-upload-to-r2`:
+  ```text
+  <thư mục kết quả>/Toan6/Bài 19_…/T48_Hình thang cân.mp4      ← script video: 3 tầng cuối
+  <thư mục kết quả>/Toan6/Bài 19_…/T48_Hình thang cân/vi.vtt   ← script CC: đúng 4 tầng
+  ```
+  - Vị trí lấy **3 tầng cuối** của `leaf_relpath` (bỏ folder bọc ngoài, vì script CC đòi đúng 4 tầng). Bài có ít hơn 3 tầng: dùng nguyên `leaf_relpath` (vẫn lưu được, upload báo lỗi như §4.3).
+  - Không tạo `<leaf>/output/` trong `uploads/` cho job mới.
+  - Ghi đè từng file một cách nguyên tử (ghi file tạm cùng thư mục rồi `os.replace`); **chỉ** thay `<T…>.mp4` và `<T…>/vi.vtt`, không xoá/thay cả thư mục `<T…>/` (sau này có thể chứa quiz `.json`).
+  - Hai bài (cùng lượt bấm, hoặc với job đang chờ/chạy) trỏ tới **cùng vị trí** → từ chối: `Trùng vị trí lưu với bài <relpath khác>`.
+- Nút tải MP4/zip, xem phụ đề và upload R2 đọc file từ vị trí mới (job lưu cả đường dẫn video và phụ đề). Job cũ (trước thay đổi) vẫn đọc từ `<leaf>/output/`.
+- Hàng đợi hiện `Lưu tại: <đường dẫn video>` cho bài đã xong.
+- Nút "Upload lên R2" vẫn chỉ upload các bài của batch đang bấm (qua cây export), không upload cả thư mục kết quả.
+
 ## 5. Để builder tự quyết
 Tên module, định dạng API JSON, cách đọc tiến độ từ stdout, hard link hay copy, bố cục chi tiết các dòng kết quả.
 

@@ -130,6 +130,7 @@ def build_status(
     *,
     max_reference_seconds: float = DEFAULT_MAX_REFERENCE_SECONDS,
     upload_repo: Path | None = None,
+    last_output_root: str | None = None,
 ) -> dict[str, Any]:
     ffmpeg = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
     slide_export = True if sys.platform == "win32" else bool(
@@ -150,4 +151,5 @@ def build_status(
         "max_reference_seconds": float(max_reference_seconds),
         "upload_ready": upload_ready,
         "upload_reason": upload_reason,
+        "last_output_root": last_output_root,
     }

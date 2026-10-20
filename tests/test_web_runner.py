@@ -26,9 +26,9 @@ def _deck(path: Path) -> None:
     presentation.save(path)
 
 
-def _setup(tmp_path: Path):
+def _setup(tmp_path: Path, leaf_relpath: str = "root/T48_Hình thang cân"):
     uploads = tmp_path / "uploads"
-    leaf = uploads / "batch-1" / "root" / "T48_Hình thang cân"
+    leaf = uploads / "batch-1" / leaf_relpath
     _deck(leaf / "TOAN6_B19_T48.pptx")
     (leaf / "script.txt").write_text("Slide 1: Xin chào.", encoding="utf-8")
     logo = tmp_path / "logo.png"
@@ -38,7 +38,7 @@ def _setup(tmp_path: Path):
     settings = GlobalSettings(logo=logo, outro=outro)
     job = WebJob.new(
         batch_id="batch-1",
-        leaf_relpath="root/T48_Hình thang cân",
+        leaf_relpath=leaf_relpath,
         profile_id="abc12345",
         script_chars=9,
     )
@@ -108,7 +108,27 @@ def test_output_named_after_leaf_folder(tmp_path: Path) -> None:
         "WEBVTT\n\n1\n00:00:00.000"
     )
     assert result.video_path.name == "T48_Hình thang cân.mp4"
+    assert result.vtt_path == leaf / "output" / "vi.vtt"
     assert result.tts_seconds == 3.0
+
+
+def test_output_root_publishes_last_three_parts_without_legacy_output(
+    tmp_path: Path,
+) -> None:
+    leaf_relpath = "Ngay/Toan6/Bài 1_X/T1_Y"
+    leaf, job, context, _captured = _setup(tmp_path, leaf_relpath)
+    output_root = tmp_path / "out"
+    job = WebJob.from_dict({**job.to_dict(), "output_root": str(output_root)})
+
+    result = run_web_job(job, context, threading.Event(), lambda *_args: None)
+
+    video_path = output_root / "Toan6" / "Bài 1_X" / "T1_Y.mp4"
+    vtt_path = output_root / "Toan6" / "Bài 1_X" / "T1_Y" / "vi.vtt"
+    assert video_path.read_bytes() == b"video"
+    assert vtt_path.read_text(encoding="utf-8").startswith("WEBVTT\n")
+    assert result.video_path == video_path
+    assert result.vtt_path == vtt_path
+    assert not (leaf / "output").exists()
 
 
 def test_uses_job_profile_and_work_dir(tmp_path: Path) -> None:

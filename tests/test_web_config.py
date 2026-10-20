@@ -143,3 +143,16 @@ def test_build_status_includes_max_reference_seconds(tmp_path: Path) -> None:
     )
 
     assert status["max_reference_seconds"] == 6.5
+
+
+def test_build_status_includes_last_output_root(tmp_path: Path) -> None:
+    output_root = str(tmp_path / "Video bài giảng")
+
+    status = build_status(
+        GlobalSettings(),
+        lambda: False,
+        8080,
+        last_output_root=output_root,
+    )
+
+    assert status["last_output_root"] == output_root

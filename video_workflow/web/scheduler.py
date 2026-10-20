@@ -4,8 +4,10 @@ import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import replace
+from pathlib import Path
 
 from ..job_models import JobStatus, utc_now
+from .output_location import output_paths
 from .runner import RunResult, Update, describe_error
 from .state import WebJob, WebStore
 
@@ -98,26 +100,61 @@ class JobScheduler:
             for job in self._jobs
         )
 
+    def _active_output_job(
+        self,
+        output_root: str,
+        leaf_relpath: str,
+        *,
+        exclude: str | None = None,
+    ) -> WebJob | None:
+        destination = output_paths(Path(output_root), leaf_relpath)
+        for job in self._jobs:
+            if (
+                job.id != exclude
+                and job.output_root is not None
+                and job.status in {JobStatus.WAITING, JobStatus.RUNNING}
+                and output_paths(Path(job.output_root), job.leaf_relpath)
+                == destination
+            ):
+                return job
+        return None
+
     def enqueue(
         self,
         batch_id: str,
         leaves: Sequence[tuple[str, int]],
         profile_id: str,
+        output_root: str | None = None,
     ) -> list[WebJob]:
         with self._condition:
             seen: set[str] = set()
+            seen_outputs: dict[tuple[Path, Path], str] = {}
             for leaf_relpath, _script_chars in leaves:
                 if leaf_relpath in seen or self._active_leaf(batch_id, leaf_relpath):
                     raise DuplicateJobError(
                         f"Bài {leaf_relpath} đang chờ hoặc đang chạy"
                     )
                 seen.add(leaf_relpath)
+                if output_root is not None:
+                    destination = output_paths(Path(output_root), leaf_relpath)
+                    previous = seen_outputs.get(destination)
+                    if previous is not None:
+                        raise DuplicateJobError(
+                            f"Trùng vị trí lưu với bài {previous}"
+                        )
+                    active = self._active_output_job(output_root, leaf_relpath)
+                    if active is not None:
+                        raise DuplicateJobError(
+                            f"Trùng vị trí lưu với bài {active.leaf_relpath}"
+                        )
+                    seen_outputs[destination] = leaf_relpath
             created = [
                 WebJob.new(
                     batch_id=batch_id,
                     leaf_relpath=leaf_relpath,
                     profile_id=profile_id,
                     script_chars=script_chars,
+                    output_root=output_root,
                 )
                 for leaf_relpath, script_chars in leaves
             ]
@@ -157,6 +194,16 @@ class JobScheduler:
                 raise DuplicateJobError(
                     f"Bài {job.leaf_relpath} đang chờ hoặc đang chạy"
                 )
+            if job.output_root is not None:
+                active = self._active_output_job(
+                    job.output_root,
+                    job.leaf_relpath,
+                    exclude=job.id,
+                )
+                if active is not None:
+                    raise DuplicateJobError(
+                        f"Trùng vị trí lưu với bài {active.leaf_relpath}"
+                    )
             retried = replace(
                 job,
                 status=JobStatus.WAITING,
@@ -168,6 +215,7 @@ class JobScheduler:
                 started_at=None,
                 finished_at=None,
                 video_path=None,
+                vtt_path=None,
                 tts_seconds=None,
             )
             self._jobs[index] = retried
@@ -275,6 +323,11 @@ class JobScheduler:
                     error="Đã huỷ" if status is JobStatus.INTERRUPTED else None,
                     video_path=(
                         None if status is JobStatus.INTERRUPTED else str(result.video_path)
+                    ),
+                    vtt_path=(
+                        None
+                        if status is JobStatus.INTERRUPTED or result.vtt_path is None
+                        else str(result.vtt_path)
                     ),
                     tts_seconds=(
                         None if status is JobStatus.INTERRUPTED else result.tts_seconds
