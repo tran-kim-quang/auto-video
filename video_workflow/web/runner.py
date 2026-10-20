@@ -20,6 +20,7 @@ from ..pipeline import (
 from ..voicestudio_client import VoiceStudioClient, VoiceStudioOutOfMemory
 from ..vtt import render_vtt_from_report
 from .gpu import GatedVoiceStudioClient, GpuArbiter, GpuWaitCancelled
+from .output_location import output_paths, publish_output_files
 from .state import WebJob
 
 
@@ -104,17 +105,34 @@ def run_web_job(
     update("writing_subtitles", None, None)
     vtt_text = render_vtt_from_report(report.slides)
     update("publishing_output", None, None)
-    video_path = publish_leaf_output(
-        leaf_path,
-        Path(report.output),
-        leaf_path.name,
-        vtt_text,
-    )
+    if job.output_root is not None:
+        video_path, vtt_path = output_paths(
+            Path(job.output_root),
+            job.leaf_relpath,
+        )
+        publish_output_files(
+            Path(report.output),
+            vtt_text,
+            video_path,
+            vtt_path,
+        )
+    else:
+        video_path = publish_leaf_output(
+            leaf_path,
+            Path(report.output),
+            leaf_path.name,
+            vtt_text,
+        )
+        vtt_path = video_path.with_name("vi.vtt")
     tts_seconds = sum(
         float(slide.get("generation", {}).get("generation_seconds") or 0)
         for slide in report.slides
     )
-    return RunResult(video_path=video_path, tts_seconds=tts_seconds)
+    return RunResult(
+        video_path=video_path,
+        tts_seconds=tts_seconds,
+        vtt_path=vtt_path,
+    )
 
 
 def _causes(exc: BaseException):
