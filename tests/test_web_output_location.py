@@ -4,7 +4,10 @@ import pytest
 
 from video_workflow.web.output_location import (
     OutputRootError,
+    is_parked,
+    move_output_files,
     output_paths,
+    parked_paths,
     publish_output_files,
     resolve_output_root,
 )
@@ -24,6 +27,38 @@ def test_output_paths_keep_all_parts_when_less_than_three() -> None:
         Path("/o/test gen/T48_Y.mp4"),
         Path("/o/test gen/T48_Y/vi.vtt"),
     )
+
+
+def test_parked_paths_use_last_three_parts_under_waiting_directory() -> None:
+    paths = parked_paths(Path("/o"), "Ngay/Toan6/Bài 1_X/T1_Y")
+
+    assert paths == (
+        Path("/o/_chua-co-tren-production/Toan6/Bài 1_X/T1_Y.mp4"),
+        Path("/o/_chua-co-tren-production/Toan6/Bài 1_X/T1_Y/vi.vtt"),
+    )
+    assert is_parked(Path("/o"), paths[0]) is True
+    assert is_parked(Path("/o"), Path("/o/Toan6/Bài 1_X/T1_Y.mp4")) is False
+
+
+def test_move_output_files_replaces_existing_destinations(tmp_path: Path) -> None:
+    video_src = tmp_path / "source.mp4"
+    vtt_src = tmp_path / "source" / "vi.vtt"
+    video_dest = tmp_path / "parked" / "lesson.mp4"
+    vtt_dest = tmp_path / "parked" / "lesson" / "vi.vtt"
+    video_src.write_bytes(b"new video")
+    vtt_src.parent.mkdir()
+    vtt_src.write_text("WEBVTT\nnew\n", encoding="utf-8")
+    video_dest.parent.mkdir()
+    video_dest.write_bytes(b"old video")
+    vtt_dest.parent.mkdir()
+    vtt_dest.write_text("WEBVTT\nold\n", encoding="utf-8")
+
+    move_output_files(video_src, vtt_src, video_dest, vtt_dest)
+
+    assert video_dest.read_bytes() == b"new video"
+    assert vtt_dest.read_text(encoding="utf-8") == "WEBVTT\nnew\n"
+    assert not video_src.exists()
+    assert not vtt_src.exists()
 
 
 @pytest.mark.parametrize(

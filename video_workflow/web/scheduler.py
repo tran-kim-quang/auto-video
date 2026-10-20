@@ -227,6 +227,18 @@ class JobScheduler:
         with self._condition:
             return tuple(self._jobs)
 
+    def update_output_paths(
+        self, job_id: str, video_path: str, vtt_path: str
+    ) -> WebJob:
+        with self._condition:
+            index = self._index(job_id)
+            updated = replace(
+                self._jobs[index], video_path=video_path, vtt_path=vtt_path
+            )
+            self._jobs[index] = updated
+            self._save()
+            return updated
+
     def _dispatch(self) -> None:
         while True:
             with self._condition:

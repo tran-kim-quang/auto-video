@@ -210,6 +210,33 @@ SOURCE_DIR="<thư mục>" npm run dry-run
 CC_SOURCE_DIR="<thư mục>" npm run dry-run:cc
 ```
 
+### Đồng bộ production
+
+Mỗi khu vực upload của batch có ô **Token admin (production)** dùng chung cho
+**Kiểm tra upload** và **Upload lên R2**. Token chỉ được gửi trong request của
+lượt chạy, không lưu vào state, log, manifest, export hay `localStorage`.
+Upload thật bắt buộc có token; dry-run vẫn có thể chạy không token nhưng sẽ báo
+chưa tra production.
+
+Backend mặc định là `https://api.pyramid.edu.vn/api/v1`. Có thể đổi bằng biến
+`PYRAMID_BACKEND_API` hoặc tham số:
+
+```bash
+python -m video_workflow.web --backend-api http://127.0.0.1:8090/api/v1
+```
+
+Tool đọc toàn bộ bài của từng khoá và lấy `lessonOrder`, slug, tên bài từ
+production trước khi upload. Bài chưa có trên production không được upload;
+khi chạy thật, video và phụ đề được chuyển vào
+`<thư-mục-kết-quả>/_chua-co-tren-production/`. Sau khi bài được tạo trên
+production, lần chạy tiếp theo tự chuyển file về vị trí chuẩn.
+
+Sau khi upload R2, tool tự động sao lưu dữ liệu production, tạo và import
+manifest video đã chuẩn hoá, chờ worker backend, import manifest phụ đề, rồi
+đối chiếu dữ liệu trước/sau. Trạng thái `needs_review` nghĩa là đã phát hiện
+thay đổi ngoài danh sách cho phép; giao diện hiển thị chi tiết để kiểm tra và
+tool không tự hoàn tác.
+
 ## Phát triển và kiểm tra
 
 ```bash

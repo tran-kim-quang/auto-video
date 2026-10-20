@@ -17,10 +17,21 @@ from ..leaf_scan import LeafFolder, scan_leaf_folders
 from .config import WebLayout
 from .estimate import remaining_seconds, seconds_per_char
 from .output_location import OutputRootError, resolve_output_root
+from .production_api import (
+    ProductionApiError,
+    ProductionAuthError,
+    redact_token,
+)
 from .scheduler import DuplicateJobError, JobScheduler, JobStateError
 from .state import BatchRecord, WebStore
 from .upload_export import find_output_files
-from .upload_service import UploadBusyError, UploadNotReadyError, UploadService
+from .upload_service import (
+    AdminTokenRequiredError,
+    OverwriteConfirmationRequired,
+    UploadBusyError,
+    UploadNotReadyError,
+    UploadService,
+)
 from .uploads import UploadPathError, UploadTooLarge, store_batch
 from .voices import VoiceInUseError, VoiceInputError, VoiceService
 
@@ -38,6 +49,8 @@ class WebServices:
 
 class UploadRequest(BaseModel):
     dry_run: StrictBool
+    admin_token: str | None = None
+    confirm_overwrite: StrictBool = False
 
 
 class _ZipStreamWriter:
@@ -186,7 +199,29 @@ def create_app(services: WebServices) -> FastAPI:
             record = services.uploads.start(
                 batch_id,
                 dry_run=payload.dry_run,
+                admin_token=payload.admin_token,
+                confirm_overwrite=payload.confirm_overwrite,
             )
+        except AdminTokenRequiredError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except ProductionAuthError as exc:
+            raise HTTPException(
+                401, "Token admin không hợp lệ hoặc đã hết hạn"
+            ) from exc
+        except ProductionApiError as exc:
+            raise HTTPException(
+                502, redact_token(str(exc), payload.admin_token or "")
+            ) from exc
+        except OverwriteConfirmationRequired as exc:
+            raise HTTPException(
+                409,
+                {
+                    "message": (
+                        f"{len(exc.overwrite)} bài sẽ GHI ĐÈ video đang có trên web"
+                    ),
+                    "overwrite": exc.overwrite,
+                },
+            ) from exc
         except UploadBusyError as exc:
             raise HTTPException(409, str(exc)) from exc
         except UploadNotReadyError as exc:

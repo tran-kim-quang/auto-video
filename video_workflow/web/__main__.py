@@ -48,6 +48,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         layout,
         repo=lambda: args.upload_repo,
         jobs=scheduler.jobs,
+        backend_api=lambda: args.backend_api,
+        update_output_paths=scheduler.update_output_paths,
     )
 
     def voice_ok() -> bool:
